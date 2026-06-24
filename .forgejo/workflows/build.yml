@@ -9,39 +9,30 @@ on:
 jobs:
   build:
     runs-on: ci
-    container:
-      image: node:latest
     steps:
-      - name: Install Nix
-        run: |
-          curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon
-          mkdir -p ~/.config/nix
-          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
-          echo "/root/.nix-profile/bin" >> $GITHUB_PATH
-      - uses: actions/checkout@v4
-      - name: Build
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: install nix
+        uses: https://github.com/determinateSystems/nix-installer-action@v12
+
+      - name: nix build
         run: nix build . --print-build-logs
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          RELEASE_JSON=$(curl -s -X POST \
-            -H "Authorization: token $GITEA_TOKEN" \
-            -H "Content-Type: application/json" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases" \
-            -d "{\"tag_name\":\"${TAG}\",\"name\":\"kb.ai ${TAG}\"}" 2>/dev/null)
-          if echo "$RELEASE_JSON" | grep -q '"id"'; then
-            RELEASE_ID=$(echo "$RELEASE_JSON" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
-          else
-            RELEASE_ID=$(curl -s \
-              -H "Authorization: token $GITEA_TOKEN" \
-              "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases/tags/${TAG}" \
-              | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
-          fi
-          curl -s -X POST \
-            -H "Authorization: token $GITEA_TOKEN" \
-            -H "Content-Type: application/octet-stream" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=kbai-linux-amd64" \
-            --data-binary @result/bin/kbai
+
+      - name: upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: kbai
+          path: ./result/bin/kbai
+          archive: false
+          retention-days: 5
+
+      - name: publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/forgejo-release@v2.5.0
+        with:
+          direction: upload
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release-dir: ./result/bin/
+          release-notes-assistant: true
+          override: true
