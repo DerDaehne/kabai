@@ -64,7 +64,7 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 
 #### 4. C-Kern-Implementierung
 
-**Datenbank-Anbindung (`src/db/`, `include/db/`)**
+**Datenbank-Anbindung (`src/db/`)**
 - [x] `connection.h/c`: Verbindungshandling mit libpq
 - [x] `db_connect()`: Verbindung zur PostgreSQL-DB
 - [x] `db_disconnect()`: Verbindungsschließung
@@ -75,7 +75,7 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
   - `db_execute_transaction()` für atomare Operationen
   - `db_in_transaction()` für Statusprüfung
 
-**Kanban-Logik (`src/kanban/`, `include/kanban/`)**
+**Kanban-Logik (`src/kanban/`)**
 - [x] **Projects-Modul**:
   - `project_create()`: Projekt anlegen
   - `project_get_by_id()`: Projekt nach ID
@@ -109,7 +109,7 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 - [x] Umgebungsvariablen für DB-Konfiguration
 - [x] Server-Info Ausgabe bei Start
 
-**Kommentare/Work-Log (`src/kanban/comments.c`, `include/kanban/comments.h`)**
+**Kommentare/Work-Log (`src/kanban/comments.c`, `src/kanban/comments.h`)**
 - [x] `comment_add()`: Kommentar hinzufügen
 - [x] `comment_list_by_ticket()`: Alle Kommentare eines Tickets
 - [x] `comment_get_by_id()`: Einzelner Kommentar

@@ -58,25 +58,20 @@ Der Server liest von STDIN und schreibt nach STDOUT (MCP-Protokoll über STDIO).
 
 ```
 kb.ai/
-├── src/                    # C-Quellcode
+├── src/                    # C-Quellcode (inkl. Header)
 │   ├── main.c              # MCP-Server Haupteinstiegspunkt
 │   ├── db/                 # Datenbank-Anbindung (libpq)
+│   │   ├── connection.h
 │   │   ├── connection.c
-│   │   └── connection.h
+│   │   ├── transaction.h
+│   │   └── transaction.c
 │   └── kanban/             # Kanban-Logik
-│       ├── tickets.c       # Tickets + Editing
-│       ├── tickets.h
+│       ├── projects.h
 │       ├── projects.c
-│       ├── projects.h
-│       ├── comments.c     # Work-Log / Kommentare
-│       └── comments.h
-├── include/                # Public Header
-│   ├── db/
-│   │   └── connection.h
-│   └── kanban/
 │       ├── tickets.h
-│       ├── projects.h
-│       └── comments.h
+│       ├── tickets.c
+│       ├── comments.h
+│       └── comments.c
 ├── migrations/             # Datenbank-Migrationen
 │   └── V1__Initial_Multi_Project_Kanban_Schema.sql
 ├── flake.nix               # Nix Flake Build-Konfiguration
@@ -85,6 +80,7 @@ kb.ai/
 ├── AGENTS.md               # Agent-Anweisungen
 ├── README.md
 └── .gitignore
+
 ```
 
 ## MCP-Tools

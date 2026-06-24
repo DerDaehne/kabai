@@ -30,7 +30,7 @@
           buildPhase = ''
             # Build with all includes and libraries
             gcc -o kbai \
-              -I. -I./include \
+              -I./src \
               -I${pkgs.postgresql.dev}/include \
               -I${pkgs.cjson}/include \
               src/main.c \
@@ -47,55 +47,12 @@
           installPhase = ''
             mkdir -p $out/bin
             cp kbai $out/bin/
-            
-            # Also install to $out for nix run
-            mkdir -p $out
-            cp kbai $out/kbai
           '';
         };
 
         apps.default = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/kbai";
-        };
-
-        # Static build for releases
-        packages.static = pkgs.stdenv.mkDerivation {
-          name = "kbai-static";
-          inherit (self.packages.${system}.default) version src;
-          
-          nativeBuildInputs = with pkgs; [
-            gcc
-            pkg-config
-          ];
-
-          buildInputs = with pkgs; [
-            postgresql
-            cjson
-          ];
-
-          buildPhase = ''
-            # Build fully static binary
-            gcc -o kbai-static \
-              -static \
-              -I. -I./include \
-              -I${pkgs.postgresql.dev}/include \
-              -I${pkgs.cjson}/include \
-              src/main.c \
-              src/db/connection.c \
-              src/db/transaction.c \
-              src/kanban/projects.c \
-              src/kanban/tickets.c \
-              src/kanban/comments.c \
-              -L${pkgs.postgresql.lib}/lib \
-              -L${pkgs.cjson}/lib \
-              -lpq -lcjson -lm -lpthread -ldl
-          '';
-
-          installPhase = ''
-            mkdir -p $out/bin
-            cp kbai-static $out/bin/kbai
-          '';
         };
 
         devShells.default = pkgs.mkShell {
@@ -112,8 +69,7 @@
             echo "======================================"
             echo ""
             echo "Build commands:"
-            echo "  nix build           - Build standard binary"
-            echo "  nix build .#static   - Build static binary"
+            echo "  nix build           - Build binary"
             echo "  nix run .           - Run MCP server"
             echo ""
             echo "Environment variables for DB connection:"
@@ -123,7 +79,7 @@
             echo "  KB_AI_DB_USER      (default: postgres)"
             echo "  KB_AI_DB_PASSWORD  (default: )"
             echo ""
-            export CFLAGS="-I. -I./include -I${pkgs.postgresql.dev}/include -I${pkgs.cjson}/include"
+            export CFLAGS="-I./src -I${pkgs.postgresql.dev}/include -I${pkgs.cjson}/include"
             export LDFLAGS="-L${pkgs.postgresql.lib}/lib -L${pkgs.cjson.lib}/lib -lpq -lcjson"
           '';
         };
