@@ -12,24 +12,35 @@ jobs:
     container:
       image: nixos/nix:latest
     steps:
-      - name: Install Node.js for actions
-        run: nix profile install nixpkgs#nodejs nixpkgs#git
-      - uses: actions/checkout@v4
       - name: Build
-        run: nix build . --print-build-logs
+        env:
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Download source as tarball (no git/node needed)
+          curl -sL "${{ github.server_url }}/${{ github.repository }}/archive/${{ github.sha }}.tar.gz" \
+            | tar xz --strip-components=1
+          nix build . --print-build-logs
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
+          # Create release, or get existing one if already created
           RELEASE_JSON=$(curl -s -X POST \
             -H "Authorization: token $GITEA_TOKEN" \
             -H "Content-Type: application/json" \
             "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases" \
-            -d "{\"tag_name\":\"${TAG}\",\"name\":\"kb.ai ${TAG}\"}")
-          echo "$RELEASE_JSON"
-          RELEASE_ID=$(echo "$RELEASE_JSON" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"kb.ai ${TAG}\"}" 2>/dev/null)
+          if echo "$RELEASE_JSON" | grep -q '"id"'; then
+            RELEASE_ID=$(echo "$RELEASE_JSON" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+          else
+            # Release already exists, get its ID
+            RELEASE_ID=$(curl -s \
+              -H "Authorization: token $GITEA_TOKEN" \
+              "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases/tags/${TAG}" \
+              | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+          fi
           curl -s -X POST \
             -H "Authorization: token $GITEA_TOKEN" \
             -H "Content-Type: application/octet-stream" \
