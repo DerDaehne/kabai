@@ -20,7 +20,6 @@
           nativeBuildInputs = with pkgs; [
             gcc
             pkg-config
-            make
           ];
 
           buildInputs = with pkgs; [
@@ -28,31 +27,19 @@
             cjson
           ];
 
-          # For static linking
-          NIX_CFLAGS_COMPILE = "-I. -I./include -I${pkgs.postgresql.dev}/include -I${pkgs.cjson.dev}/include";
-          NIX_LDFLAGS = pkgs.lib.makeLibPath [
-            pkgs.postgresql
-            pkgs.cjson
-          ];
-
-          # Static build flags
-          doStatic = true;
-          separateDebugInfo = true;
-
           buildPhase = ''
-            # Build with static linking
+            # Build with all includes and libraries
             gcc -o kbai \
-              -static \
               -I. -I./include \
-              ${pkgs.postgresql.dev}/include \
-              ${pkgs.cjson.dev}/include \
+              -I${pkgs.postgresql.dev}/include \
+              -I${pkgs.cjson}/include \
               src/main.c \
               src/db/connection.c \
               src/kanban/projects.c \
               src/kanban/tickets.c \
               src/kanban/comments.c \
               -L${pkgs.postgresql.lib}/lib \
-              -L${pkgs.cjson.lib}/lib \
+              -L${pkgs.cjson}/lib \
               -lpq -lcjson -lm
           '';
 
@@ -79,7 +66,6 @@
           nativeBuildInputs = with pkgs; [
             gcc
             pkg-config
-            make
           ];
 
           buildInputs = with pkgs; [
@@ -87,30 +73,20 @@
             cjson
           ];
 
-          # Static linking configuration
-          doStatic = true;
-          separateDebugInfo = true;
-
-          NIX_CFLAGS_COMPILE = "-I. -I./include -I${pkgs.postgresql.dev}/include -I${pkgs.cjson.dev}/include";
-          NIX_LDFLAGS = pkgs.lib.makeLibPath [
-            pkgs.postgresql
-            pkgs.cjson
-          ];
-
           buildPhase = ''
             # Build fully static binary
             gcc -o kbai-static \
               -static \
               -I. -I./include \
-              ${pkgs.postgresql.dev}/include \
-              ${pkgs.cjson.dev}/include \
+              -I${pkgs.postgresql.dev}/include \
+              -I${pkgs.cjson}/include \
               src/main.c \
               src/db/connection.c \
               src/kanban/projects.c \
               src/kanban/tickets.c \
               src/kanban/comments.c \
               -L${pkgs.postgresql.lib}/lib \
-              -L${pkgs.cjson.lib}/lib \
+              -L${pkgs.cjson}/lib \
               -lpq -lcjson -lm -lpthread -ldl
           '';
 
@@ -127,7 +103,6 @@
             pkg-config
             postgresql
             cjson
-            make
           ];
 
           shellHook = ''
@@ -146,7 +121,7 @@
             echo "  KB_AI_DB_USER      (default: postgres)"
             echo "  KB_AI_DB_PASSWORD  (default: )"
             echo ""
-            export CFLAGS="-I. -I./include -I${pkgs.postgresql.dev}/include -I${pkgs.cjson.dev}/include"
+            export CFLAGS="-I. -I./include -I${pkgs.postgresql.dev}/include -I${pkgs.cjson}/include"
             export LDFLAGS="-L${pkgs.postgresql.lib}/lib -L${pkgs.cjson.lib}/lib -lpq -lcjson"
           '';
         };
