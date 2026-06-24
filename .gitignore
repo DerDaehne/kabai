@@ -1,0 +1,34 @@
+# C Build artifacts
+*.o
+*.a
+*.so
+*.exe
+build/
+result/
+
+# Nix
+.nix-chicken/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+
+# Environment
+.env
+.env.local
