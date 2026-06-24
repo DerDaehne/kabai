@@ -4,162 +4,117 @@
 #include "kanban/projects.h"
 #include "db/connection.h"
 
-Project* project_create(
+Project *project_create(
     DatabaseConnection *db,
     const char *slug,
     const char *name,
     const char *description
 ) {
-    if (!db || !slug || !name) {
-        return NULL;
-    }
-    
-    char *esc_slug = malloc(2 * strlen(slug) + 1);
-    char *esc_name = malloc(2 * strlen(name) + 1);
-    char *esc_desc = NULL;
-    
-    if (!esc_slug || !esc_name) {
-        free(esc_slug);
-        free(esc_name);
-        return NULL;
-    }
-    
-    PQescapeStringConn(db->conn, esc_slug, slug, strlen(slug), NULL);
-    PQescapeStringConn(db->conn, esc_name, name, strlen(name), NULL);
-    
+    if (!db || !slug || !name) return NULL;
+
+    PGresult *res;
+
     if (description) {
-        esc_desc = malloc(2 * strlen(description) + 1);
-        if (!esc_desc) {
-            free(esc_slug);
-            free(esc_name);
-            return NULL;
-        }
-        PQescapeStringConn(db->conn, esc_desc, description, strlen(description), NULL);
-    }
-    
-    char query[2048];
-    if (esc_desc) {
-        snprintf(query, sizeof(query),
-            "INSERT INTO projects (slug, name, description) VALUES ('%s', '%s', '%s') RETURNING id",
-            esc_slug, esc_name, esc_desc);
+        const char *params[3] = {slug, name, description};
+        res = PQexecParams(db->conn,
+            "INSERT INTO projects (slug, name, description) VALUES ($1, $2, $3) RETURNING id",
+            3, NULL, params, NULL, NULL, 0);
     } else {
-        snprintf(query, sizeof(query),
-            "INSERT INTO projects (slug, name) VALUES ('%s', '%s') RETURNING id",
-            esc_slug, esc_name);
+        const char *params[2] = {slug, name};
+        res = PQexecParams(db->conn,
+            "INSERT INTO projects (slug, name) VALUES ($1, $2) RETURNING id",
+            2, NULL, params, NULL, NULL, 0);
     }
-    
-    PGresult *res = db_query(db, query);
-    free(esc_slug);
-    free(esc_name);
-    free(esc_desc);
-    
+
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        fprintf(stderr, "project_create: %s\n", res ? PQresultErrorMessage(res) : "null result");
         if (res) PQclear(res);
         return NULL;
     }
-    
+
     int id = atoi(PQgetvalue(res, 0, 0));
     PQclear(res);
-    
-    Project *project = malloc(sizeof(Project));
-    if (!project) {
-        return NULL;
-    }
-    
-    project->id = id;
-    project->slug = strdup(slug);
-    project->name = strdup(name);
-    project->description = description ? strdup(description) : NULL;
-    
-    return project;
+
+    Project *p = malloc(sizeof(Project));
+    if (!p) return NULL;
+
+    p->id          = id;
+    p->slug        = strdup(slug);
+    p->name        = strdup(name);
+    p->description = description ? strdup(description) : NULL;
+    return p;
 }
 
-Project* project_get_by_id(DatabaseConnection *db, int project_id) {
-    if (!db) {
-        return NULL;
-    }
-    
-    char query[256];
-    snprintf(query, sizeof(query), "SELECT id, slug, name, description FROM projects WHERE id = %d", project_id);
-    
-    PGresult *res = db_query(db, query);
+Project *project_get_by_id(DatabaseConnection *db, int project_id) {
+    if (!db) return NULL;
+
+    char id_str[32];
+    snprintf(id_str, sizeof(id_str), "%d", project_id);
+    const char *params[1] = {id_str};
+
+    PGresult *res = PQexecParams(db->conn,
+        "SELECT id, slug, name, description FROM projects WHERE id = $1",
+        1, NULL, params, NULL, NULL, 0);
+
     if (!res || PQntuples(res) == 0) {
         if (res) PQclear(res);
         return NULL;
     }
-    
-    Project *project = malloc(sizeof(Project));
-    if (!project) {
-        PQclear(res);
-        return NULL;
-    }
-    
-    project->id = atoi(PQgetvalue(res, 0, 0));
-    project->slug = strdup(PQgetvalue(res, 0, 1));
-    project->name = strdup(PQgetvalue(res, 0, 2));
-    char *desc = PQgetvalue(res, 0, 3);
-    project->description = desc && strlen(desc) > 0 ? strdup(desc) : NULL;
-    
+
+    Project *p = malloc(sizeof(Project));
+    if (!p) { PQclear(res); return NULL; }
+
+    p->id   = atoi(PQgetvalue(res, 0, 0));
+    p->slug = strdup(PQgetvalue(res, 0, 1));
+    p->name = strdup(PQgetvalue(res, 0, 2));
+    const char *desc = PQgetvalue(res, 0, 3);
+    p->description = (desc && *desc) ? strdup(desc) : NULL;
+
     PQclear(res);
-    return project;
+    return p;
 }
 
-Project* project_get_by_slug(DatabaseConnection *db, const char *slug) {
-    if (!db || !slug) {
-        return NULL;
-    }
-    
-    char *esc_slug = malloc(2 * strlen(slug) + 1);
-    if (!esc_slug) {
-        return NULL;
-    }
-    
-    PQescapeStringConn(db->conn, esc_slug, slug, strlen(slug), NULL);
-    
-    char query[256];
-    snprintf(query, sizeof(query), "SELECT id, slug, name, description FROM projects WHERE slug = '%s'", esc_slug);
-    free(esc_slug);
-    
-    PGresult *res = db_query(db, query);
+Project *project_get_by_slug(DatabaseConnection *db, const char *slug) {
+    if (!db || !slug) return NULL;
+
+    const char *params[1] = {slug};
+    PGresult *res = PQexecParams(db->conn,
+        "SELECT id, slug, name, description FROM projects WHERE slug = $1",
+        1, NULL, params, NULL, NULL, 0);
+
     if (!res || PQntuples(res) == 0) {
         if (res) PQclear(res);
         return NULL;
     }
-    
-    Project *project = malloc(sizeof(Project));
-    if (!project) {
-        PQclear(res);
-        return NULL;
-    }
-    
-    project->id = atoi(PQgetvalue(res, 0, 0));
-    project->slug = strdup(PQgetvalue(res, 0, 1));
-    project->name = strdup(PQgetvalue(res, 0, 2));
-    char *desc = PQgetvalue(res, 0, 3);
-    project->description = desc && strlen(desc) > 0 ? strdup(desc) : NULL;
-    
+
+    Project *p = malloc(sizeof(Project));
+    if (!p) { PQclear(res); return NULL; }
+
+    p->id   = atoi(PQgetvalue(res, 0, 0));
+    p->slug = strdup(PQgetvalue(res, 0, 1));
+    p->name = strdup(PQgetvalue(res, 0, 2));
+    const char *desc = PQgetvalue(res, 0, 3);
+    p->description = (desc && *desc) ? strdup(desc) : NULL;
+
     PQclear(res);
-    return project;
+    return p;
 }
 
-Project** project_list_all(DatabaseConnection *db) {
-    if (!db) {
-        return NULL;
-    }
-    
-    PGresult *res = db_query(db, "SELECT id, slug, name, description FROM projects ORDER BY created_at");
+Project **project_list_all(DatabaseConnection *db) {
+    if (!db) return NULL;
+
+    PGresult *res = PQexec(db->conn,
+        "SELECT id, slug, name, description FROM projects ORDER BY created_at");
+
     if (!res || PQntuples(res) == 0) {
         if (res) PQclear(res);
         return NULL;
     }
-    
+
     int count = PQntuples(res);
-    Project **projects = calloc(count + 1, sizeof(Project*));
-    if (!projects) {
-        PQclear(res);
-        return NULL;
-    }
-    
+    Project **projects = calloc(count + 1, sizeof(Project *));
+    if (!projects) { PQclear(res); return NULL; }
+
     for (int i = 0; i < count; i++) {
         projects[i] = malloc(sizeof(Project));
         if (!projects[i]) {
@@ -167,23 +122,20 @@ Project** project_list_all(DatabaseConnection *db) {
             PQclear(res);
             return NULL;
         }
-        
-        projects[i]->id = atoi(PQgetvalue(res, i, 0));
+        projects[i]->id   = atoi(PQgetvalue(res, i, 0));
         projects[i]->slug = strdup(PQgetvalue(res, i, 1));
         projects[i]->name = strdup(PQgetvalue(res, i, 2));
-        char *desc = PQgetvalue(res, i, 3);
-        projects[i]->description = desc && strlen(desc) > 0 ? strdup(desc) : NULL;
+        const char *desc = PQgetvalue(res, i, 3);
+        projects[i]->description = (desc && *desc) ? strdup(desc) : NULL;
     }
-    
+
     projects[count] = NULL;
     PQclear(res);
     return projects;
 }
 
 void project_free(Project *project) {
-    if (!project) {
-        return;
-    }
+    if (!project) return;
     free(project->slug);
     free(project->name);
     free(project->description);
@@ -191,11 +143,8 @@ void project_free(Project *project) {
 }
 
 void project_free_array(Project **projects) {
-    if (!projects) {
-        return;
-    }
-    for (int i = 0; projects[i] != NULL; i++) {
+    if (!projects) return;
+    for (int i = 0; projects[i]; i++)
         project_free(projects[i]);
-    }
     free(projects);
 }
