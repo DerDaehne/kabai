@@ -7,6 +7,12 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 
 ---
 
+## Projekt-Ziel
+
+**kb.ai ist primär ein MCP-Server** mit PostgreSQL als Backend. Das Tool exponiert Kanban-Operationen als MCP-Tools für Agentic AI Workflows.
+
+---
+
 ## Zusammenfassung
 
 | Kategorie | Status | Fortschritt |
@@ -16,7 +22,7 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 | **C-Kern-Implementierung** | 🟡 Teilweise | ~60% |
 | **Build-System (Nix Flake)** | ✅ Fertig | 100% |
 | **MCP-Server** | ❌ Nicht begonnen | 0% |
-| **API/CLI-Schnittstelle** | ❌ Nicht begonnen | 0% |
+| **Statisch gelinkte Binaries** | ❌ Nicht begonnen | 0% |
 
 ---
 
@@ -30,6 +36,7 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 - [x] `.gitignore` für C-Projekte
 - [x] `README.md` mit Projektbeschreibung
 - [x] `AGENTS.md` mit Workflow-Regeln (vorhanden)
+- [x] `docs/PROJECT_STATUS.md` mit aktuellem Stand
 
 #### 2. Datenbank-Schema (PostgreSQL)
 - [x] **Projects-Tabelle**: Projektverwaltung mit slug, name, description
@@ -50,7 +57,8 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 - [x] `postgresql` (libpq) als Datenbank-Client
 - [x] Entwicklungsshell (`nix develop`)
 - [x] Build-Pipeline (`nix build`)
-- [x] Run-Konfiguration (`nix run . -- start`)
+- [x] Static build package (`.#static`)
+- [x] Run-Konfiguration (`nix run .`)
 
 #### 4. C-Kern-Implementierung
 
@@ -79,6 +87,24 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
   - `ticket_get_tasks()`: Tasks eines Tickets
   - Speicherfreigabe-Funktionen
 
+**MCP-Server (`src/main.c`)**
+- [x] MCP-Protokoll Grundgerüst (STDIO)
+- [x] JSON-Escape-Funktionen
+- [x] Tool-Dispatcher für kb.ai_* Tools
+- [x] Alle 10 MCP-Tools als Placeholder implementiert:
+  - `kb.ai_create_project`
+  - `kb.ai_list_projects`
+  - `kb.ai_get_project`
+  - `kb.ai_create_ticket`
+  - `kb.ai_list_tickets`
+  - `kb.ai_get_ticket`
+  - `kb.ai_move_ticket`
+  - `kb.ai_assign_ticket`
+  - `kb.ai_add_task`
+  - `kb.ai_complete_task`
+- [x] Umgebungsvariablen für DB-Konfiguration
+- [x] Server-Info Ausgabe bei Start
+
 ---
 
 ## Teilweise umgesetzt / In Arbeit
@@ -94,39 +120,32 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 - [ ] Fehlerbehandlung für SQL-Exceptions (z.B. "Illegaler Kanban-Move")
 - [ ] Transaktionsmanagement
 
-### 🟡 Command-Line-Interface (0%)
+### 🟡 MCP-Server (0%)
 
-**Geplant in `src/main.c`:**
-- [ ] `init-db`: Datenbank-Schema anlegen
-- [ ] `list-projects`: Projekte auflisten
-- [ ] `create-project`: Projekt anlegen
-- [ ] `list-tickets`: Tickets auflisten
-- [ ] `show-ticket`: Ticket-Details anzeigen
-- [ ] `create-ticket`: Ticket anlegen
-- [ ] `move-ticket`: Ticket-Status ändern
-- [ ] `assign-ticket`: Ticket zuweisen
+**Geplant in `src/main.c` und `src/mcp/`:**
+- [ ] MCP-Protokoll-Parser (JSON-RPC über STDIN/STDOUT)
+- [ ] Tool-Dispatcher für kb.ai-Tools
+- [ ] Serialisierung/Deserialisierung von MCP-Nachrichten
+- [ ] Connection-Lifecycle-Management
 
 ---
 
 ## Nicht umgesetzt
 
-### ❌ MCP-Server (0%)
+### ❌ Statisch gelinkte Binaries (0%)
 
 **Fehlend:**
-- [ ] MCP-Protokoll-Implementierung (JSON-RPC über STDIO)
-- [ ] Tool-Definitionen für MCP
-- [ ] MCP-Server-Loop
-- [ ] integration mit Datenbank-Logik
+- [ ] Nix Flake für statisches Linken konfigurieren
+- [ ] Cross-Compilation für Linux (x86_64, aarch64)
+- [ ] Cross-Compilation für macOS (x86_64, arm64)
+- [ ] Cross-Compilation für Windows (mingw)
+- [ ] Release-Pipeline für statische Binaries
 
-**Geplant:**
-- Separates Modul in `src/mcp/`
-- Tools für: Projects, Tickets, Tasks, Status, Transitions
+**Hinweis:** Docker-Container sind **ausdrücklich ausgeschlossen** per Projektvorgabe.
 
 ### ❌ HTTP-API / Web-Interface (0%)
 
-**Nicht geplant für v0.1**, aber zukünftig möglich:
-- REST-API mit libmicrohttpd oder ähnlich
-- WebSocket für Echtzeit-Updates
+**Nicht geplant** - Das Projekt ist ein reiner MCP-Server. Keine HTTP-Schnittstelle notwendig.
 
 ### ❌ Persistenz-Schicht Optimierungen (0%)
 
@@ -144,22 +163,26 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 
 ## Geplante Features (Roadmap)
 
-### Phase 1: Kernfunktionalität (Priorität: Hoch)
+### Phase 1: MCP-Server Kern (Priorität: Hoch)
 
 | Feature | Beschreibung | Abhängigkeiten |
 |---------|--------------|----------------|
-| CLI-Befehle | Grundlegende CLI-Operationen | - |
-| Error Handling | Robuste Fehlerbehandlung für DB-Operationen | CLI |
+| MCP-Server Implementierung | JSON-RPC über STDIO | Kern-Logik |
+| Error Handling | Robuste Fehlerbehandlung für DB-Operationen | Kern-Logik |
 | Transaktionsmanagement | ACID-konforme Operationen | DB-Logik |
 | Status-Validierung | Client-seitige Prüfung vor DB-Operationen | DB-Logik |
 
-### Phase 2: MCP-Integration (Priorität: Hoch)
+### Phase 2: MCP-Tools (Priorität: Hoch)
 
 | Feature | Beschreibung | Abhängigkeiten |
 |---------|--------------|----------------|
-| MCP-Server | JSON-RPC STDIO-Server | Kern-Logik |
-| MCP-Tools | Alle Kanban-Operationen als MCP-Tools | MCP-Server |
-| MCP-Tool Wrappers | Helfer für häufige Operationen | MCP-Tools |
+| Alle Kanban-Tools | MCP-Tools für Projects, Tickets, Tasks, Status | MCP-Server |
+| Tool: kb.ai_create_project | Projekt anlegen | MCP-Server |
+| Tool: kb.ai_create_ticket | Ticket anlegen | MCP-Server |
+| Tool: kb.ai_list_tickets | Tickets auflisten | MCP-Server |
+| Tool: kb.ai_move_ticket | Ticket-Status ändern | MCP-Server |
+| Tool: kb.ai_complete_task | Task abschließen | MCP-Server |
+| Tool: kb.ai_get_ticket | Ticket-Details | MCP-Server |
 
 ### Phase 3: Erweiterte Features (Priorität: Mittel)
 
@@ -175,15 +198,22 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 | Feature | Beschreibung | Abhängigkeiten |
 |---------|--------------|----------------|
 | Unit-Tests | C-Tests mit Check oder ähnlich | Kern-Logik |
-| Integrationstests | End-to-End Tests | CLI, MCP |
+| Integrationstests | End-to-End Tests | MCP-Server |
 | CI/CD Pipeline | Automatisierte Tests | Tests |
 
-### Phase 5: Performance & Skalierung (Priorität: Niedrig)
+### Phase 5: Release Engineering (Priorität: Mittel)
 
 | Feature | Beschreibung | Abhängigkeiten |
 |---------|--------------|----------------|
+| Statisches Linken | Vollständig statisch gelinkte Binaries | Build-System |
+| Cross-Compilation | Binaries für verschiedene Plattformen | Build-System |
 | Connection Pooling | Wiederverwendung von DB-Verbindungen | Kern-Logik |
 | Prepared Statements | Performance-Optimierung | Kern-Logik |
+
+### Phase 6: Performance & Skalierung (Priorität: Niedrig)
+
+| Feature | Beschreibung | Abhängigkeiten |
+|---------|--------------|----------------|
 | Async I/O | Nicht-blockierende Operationen | Kern-Logik |
 
 ---
@@ -229,21 +259,26 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 
 ### 🔥 Sofort (für erste Nutzung)
 
-1. **CLI-Befehle implementieren** (`src/main.c`)
-2. **Fehlerbehandlung für DB-Operationen**
+1. **MCP-Server implementieren** (`src/main.c`) - **LAUFEND**
+   - Grundgerüst in main.c bereits vorhanden
+   - Tool-Dispatcher implementiert
+   - Alle kb.ai_* Tools als Placeholder
+2. **Proper JSON-Parser integrieren** (cJSON oder jansson)
 3. **Build mit Nix testen**
+4. **Fehlerbehandlung für DB-Operationen verbessern**
 
 ### 📅 Nächstes Sprint (1-2 Wochen)
 
-1. **MCP-Server implementieren**
-2. **MCP-Tools definieren**
-3. **Transaktionsmanagement**
+1. **Alle MCP-Tools implementieren** (kb.ai_*)
+2. **Transaktionsmanagement**
+3. **Statisches Linken in Nix Flake konfigurieren**
 
 ### 🎯 Zukunft
 
 1. **Tests schreiben**
 2. **Performance-Optimierungen**
 3. **Erweiterte Features** (Dokumente, Kommentare, Dependencies)
+4. **Cross-Compilation für alle Zielplattformen**
 
 ---
 
@@ -295,10 +330,21 @@ psql -U postgres -d kb_ai
 
 ## Offene Fragen
 
-1. **Soll der MCP-Server als separater Prozess laufen oder in den CLI integriert werden?**
-2. **Welche MCP-Tool-Namen sollen verwendet werden?**
-3. **Sollen binäre Releases erstellt werden oder nur Source?**
-4. **Soll eine Docker-Container-Option angeboten werden?**
+1. **Welche C-Bibliothek für JSON-Parsing?** (jansson, cJSON, oder eigene Implementierung)
+   - Aktuell: Eigenes minimalistisches Parsing (für schneller Start)
+   - Empfohlen: cJSON oder jansson für Robustheit
+
+## Entscheidungen
+
+| Entscheidung | Wert | Begründung |
+|--------------|------|------------|
+| **Primärer Fokus** | MCP-Server | Projektvorgabe |
+| **Backend** | PostgreSQL | Vorhandenes Schema |
+| **MCP-Tool-Name** | `kb.ai` | Projektvorgabe |
+| **Release-Format** | Statisch gelinkte Binaries | Cross-Plattform Kompatibilität |
+| **Docker-Container** | ❌ Ausgeschlossen | Projektvorgabe |
+| **Kommunikation** | STDIO (JSON-RPC) | MCP-Standard |
+| **Umgebungsvariablen** | `KB_AI_DB_*` | Konfigurierbare DB-Verbindung |
 
 ---
 

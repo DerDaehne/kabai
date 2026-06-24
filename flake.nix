@@ -1,5 +1,5 @@
 {
-  description = "kb.ai - Database-Driven Kanban Engine for Agentic AI Workflows";
+  description = "kb.ai - MCP Server for Database-Driven Kanban (PostgreSQL Backend)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -20,26 +20,44 @@
           nativeBuildInputs = with pkgs; [
             gcc
             pkg-config
+            make
           ];
 
           buildInputs = with pkgs; [
             postgresql
           ];
 
-          CFLAGS = "-I. -I./include -I${pkgs.postgresql.dev}/include";
-          LDFLAGS = "-L${pkgs.postgresql.lib}/lib -lpq";
+          # For static linking
+          NIX_CFLAGS_COMPILE = "-I. -I./include -I${pkgs.postgresql.dev}/include";
+          NIX_LDFLAGS = pkgs.lib.makeLibPath [
+            pkgs.postgresql
+          ];
+
+          # Static build flags
+          doStatic = true;
+          separateDebugInfo = true;
 
           buildPhase = ''
-            gcc -o kbai ${CFLAGS} ${LDFLAGS} \
+            # Build with static linking
+            gcc -o kbai \
+              -static \
+              -I. -I./include \
+              ${pkgs.postgresql.dev}/include \
               src/main.c \
               src/db/connection.c \
               src/kanban/projects.c \
-              src/kanban/tickets.c
+              src/kanban/tickets.c \
+              -L${pkgs.postgresql.lib}/lib \
+              -lpq -lm
           '';
 
           installPhase = ''
             mkdir -p $out/bin
             cp kbai $out/bin/
+            
+            # Also install to $out for nix run
+            mkdir -p $out
+            cp kbai $out/kbai
           '';
         };
 
@@ -48,19 +66,76 @@
           program = "${self.packages.${system}.default}/bin/kbai";
         };
 
+        # Static build for releases
+        packages.static = pkgs.stdenv.mkDerivation {
+          name = "kbai-static";
+          inherit (self.packages.${system}.default) version src;
+          
+          nativeBuildInputs = with pkgs; [
+            gcc
+            pkg-config
+            make
+          ];
+
+          buildInputs = with pkgs; [
+            postgresql
+          ];
+
+          # Static linking configuration
+          doStatic = true;
+          separateDebugInfo = true;
+
+          NIX_CFLAGS_COMPILE = "-I. -I./include -I${pkgs.postgresql.dev}/include";
+          NIX_LDFLAGS = pkgs.lib.makeLibPath [
+            pkgs.postgresql
+          ];
+
+          buildPhase = ''
+            # Build fully static binary
+            gcc -o kbai-static \
+              -static \
+              -I. -I./include \
+              ${pkgs.postgresql.dev}/include \
+              src/main.c \
+              src/db/connection.c \
+              src/kanban/projects.c \
+              src/kanban/tickets.c \
+              -L${pkgs.postgresql.lib}/lib \
+              -lpq -lm -lpthread -ldl
+          '';
+
+          installPhase = ''
+            mkdir -p $out/bin
+            cp kbai-static $out/bin/kbai
+          '';
+        };
+
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             gcc
             gdb
             pkg-config
             postgresql
+            make
           ];
 
           shellHook = ''
-            echo "kb.ai Development Shell"
-            echo "========================"
-            echo "Commands: nix build, nix run . -- start"
-            export CFLAGS="-I${pkgs.postgresql.dev}/include"
+            echo "kb.ai MCP Server Development Shell"
+            echo "======================================"
+            echo ""
+            echo "Build commands:"
+            echo "  nix build           - Build standard binary"
+            echo "  nix build .#static   - Build static binary"
+            echo "  nix run .           - Run MCP server"
+            echo ""
+            echo "Environment variables for DB connection:"
+            echo "  KB_AI_DB_HOST      (default: localhost)"
+            echo "  KB_AI_DB_PORT      (default: 5432)"
+            echo "  KB_AI_DB_NAME      (default: kb_ai)"
+            echo "  KB_AI_DB_USER      (default: postgres)"
+            echo "  KB_AI_DB_PASSWORD  (default: )"
+            echo ""
+            export CFLAGS="-I. -I./include -I${pkgs.postgresql.dev}/include"
             export LDFLAGS="-L${pkgs.postgresql.lib}/lib -lpq"
           '';
         };
