@@ -2,7 +2,47 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../include/kanban/tickets.h"
+#include "../include/kanban/comments.h"
 #include "../include/db/connection.h"
+
+// ============================================================================
+// TicketDetailed functions
+// ============================================================================
+
+TicketDetailed* ticket_get_detailed(DatabaseConnection *db, int ticket_id) {
+    Ticket *ticket = ticket_get_by_id(db, ticket_id);
+    if (!ticket) {
+        return NULL;
+    }
+    
+    TicketDetailed *detailed = malloc(sizeof(TicketDetailed));
+    if (!detailed) {
+        ticket_free(ticket);
+        return NULL;
+    }
+    
+    detailed->ticket = ticket;
+    detailed->tasks = ticket_get_tasks(db, ticket_id);
+    detailed->comments = comment_list_by_ticket(db, ticket_id);
+    
+    return detailed;
+}
+
+void ticket_detailed_free(TicketDetailed *detailed) {
+    if (!detailed) {
+        return;
+    }
+    if (detailed->ticket) {
+        ticket_free(detailed->ticket);
+    }
+    if (detailed->tasks) {
+        ticket_task_free_array(detailed->tasks);
+    }
+    if (detailed->comments) {
+        comment_free_array(detailed->comments);
+    }
+    free(detailed);
+}
 
 Ticket* ticket_create(
     DatabaseConnection *db,
@@ -260,6 +300,75 @@ int ticket_complete_task(DatabaseConnection *db, int task_id) {
     return 1;
 }
 
+// ============================================================================
+// Ticket Update Functions
+// ============================================================================
+
+int ticket_update_title(DatabaseConnection *db, int ticket_id, const char *new_title) {
+    if (!db || !new_title) {
+        return 0;
+    }
+    
+    char *esc_title = malloc(2 * strlen(new_title) + 1);
+    if (!esc_title) {
+        return 0;
+    }
+    
+    PQescapeStringConn(db->conn, esc_title, new_title, strlen(new_title), NULL);
+    
+    char query[2048];
+    snprintf(query, sizeof(query),
+        "UPDATE tickets SET title = '%s', updated_at = NOW() WHERE id = %d",
+        esc_title, ticket_id);
+    free(esc_title);
+    
+    PGresult *res = db_query(db, query);
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        if (res) PQclear(res);
+        return 0;
+    }
+    
+    PQclear(res);
+    return 1;
+}
+
+int ticket_update_description(DatabaseConnection *db, int ticket_id, const char *new_description) {
+    if (!db) {
+        return 0;
+    }
+    
+    char *esc_desc = NULL;
+    if (new_description) {
+        esc_desc = malloc(2 * strlen(new_description) + 1);
+        if (!esc_desc) {
+            return 0;
+        }
+        PQescapeStringConn(db->conn, esc_desc, new_description, strlen(new_description), NULL);
+    }
+    
+    char query[2048];
+    if (new_description) {
+        snprintf(query, sizeof(query),
+            "UPDATE tickets SET description = '%s', updated_at = NOW() WHERE id = %d",
+            esc_desc, ticket_id);
+    } else {
+        snprintf(query, sizeof(query),
+            "UPDATE tickets SET description = NULL, updated_at = NOW() WHERE id = %d",
+            ticket_id);
+    }
+    
+    if (esc_desc) free(esc_desc);
+    
+    PGresult *res = db_query(db, query);
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        if (res) PQclear(res);
+        return 0;
+    }
+    
+    PQclear(res);
+    return 1;
+}
+
 TicketTask** ticket_get_tasks(DatabaseConnection *db, int ticket_id) {
     if (!db) {
         return NULL;
@@ -338,4 +447,73 @@ void ticket_task_free_array(TicketTask **tasks) {
         ticket_task_free(tasks[i]);
     }
     free(tasks);
+}
+
+// ============================================================================
+// Ticket Update Functions
+// ============================================================================
+
+int ticket_update_title(DatabaseConnection *db, int ticket_id, const char *new_title) {
+    if (!db || !new_title) {
+        return 0;
+    }
+    
+    char *esc_title = malloc(2 * strlen(new_title) + 1);
+    if (!esc_title) {
+        return 0;
+    }
+    
+    PQescapeStringConn(db->conn, esc_title, new_title, strlen(new_title), NULL);
+    
+    char query[2048];
+    snprintf(query, sizeof(query),
+        "UPDATE tickets SET title = '%s', updated_at = NOW() WHERE id = %d",
+        esc_title, ticket_id);
+    free(esc_title);
+    
+    PGresult *res = db_query(db, query);
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        if (res) PQclear(res);
+        return 0;
+    }
+    
+    PQclear(res);
+    return 1;
+}
+
+int ticket_update_description(DatabaseConnection *db, int ticket_id, const char *new_description) {
+    if (!db) {
+        return 0;
+    }
+    
+    char *esc_desc = NULL;
+    if (new_description) {
+        esc_desc = malloc(2 * strlen(new_description) + 1);
+        if (!esc_desc) {
+            return 0;
+        }
+        PQescapeStringConn(db->conn, esc_desc, new_description, strlen(new_description), NULL);
+    }
+    
+    char query[2048];
+    if (new_description) {
+        snprintf(query, sizeof(query),
+            "UPDATE tickets SET description = '%s', updated_at = NOW() WHERE id = %d",
+            esc_desc, ticket_id);
+    } else {
+        snprintf(query, sizeof(query),
+            "UPDATE tickets SET description = NULL, updated_at = NOW() WHERE id = %d",
+            ticket_id);
+    }
+    
+    if (esc_desc) free(esc_desc);
+    
+    PGresult *res = db_query(db, query);
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        if (res) PQclear(res);
+        return 0;
+    }
+    
+    PQclear(res);
+    return 1;
 }

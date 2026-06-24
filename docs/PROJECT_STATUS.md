@@ -91,42 +91,65 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 - [x] MCP-Protokoll Grundgerüst (STDIO)
 - [x] JSON-Escape-Funktionen
 - [x] Tool-Dispatcher für kb.ai_* Tools
-- [x] Alle 10 MCP-Tools als Placeholder implementiert:
-  - `kb.ai_create_project`
-  - `kb.ai_list_projects`
-  - `kb.ai_get_project`
-  - `kb.ai_create_ticket`
-  - `kb.ai_list_tickets`
-  - `kb.ai_get_ticket`
-  - `kb.ai_move_ticket`
-  - `kb.ai_assign_ticket`
-  - `kb.ai_add_task`
-  - `kb.ai_complete_task`
+- [x] **14 MCP-Tools** implementiert:
+  - `kb.ai_create_project`, `kb.ai_list_projects`, `kb.ai_get_project`
+  - `kb.ai_create_ticket`, `kb.ai_list_tickets`, `kb.ai_get_ticket`
+  - `kb.ai_move_ticket`, `kb.ai_assign_ticket`
+  - `kb.ai_add_task`, `kb.ai_complete_task`
+  - **NEU:** `kb.ai_update_ticket` (Titel & Beschreibung editieren)
+  - **NEU:** `kb.ai_get_ticket_detailed` (mit Tasks & Kommentaren)
+  - **NEU:** `kb.ai_add_comment` (Work-Log Eintrag hinzufügen)
+  - **NEU:** `kb.ai_list_comments` (Work-Log anzeigen)
 - [x] Umgebungsvariablen für DB-Konfiguration
 - [x] Server-Info Ausgabe bei Start
+
+**Kommentare/Work-Log (`src/kanban/comments.c`, `include/kanban/comments.h`)**
+- [x] `comment_add()`: Kommentar hinzufügen
+- [x] `comment_list_by_ticket()`: Alle Kommentare eines Tickets
+- [x] `comment_get_by_id()`: Einzelner Kommentar
+- [x] `comment_update()`: Kommentar bearbeiten
+- [x] `comment_delete()`: Kommentar löschen
+- [x] Speicherfreigabe-Funktionen
+
+**Ticket-Editing (`src/kanban/tickets.c`)**
+- [x] `ticket_update_title()`: Ticket-Titel ändern
+- [x] `ticket_update_description()`: Ticket-Beschreibung ändern
+- [x] `ticket_get_detailed()`: Ticket mit Tasks + Kommentaren
+- [x] `TicketDetailed` Struct für comprehensive Antworten
 
 ---
 
 ## Teilweise umgesetzt / In Arbeit
 
-### 🟡 C-Kern-Implementierung (60%)
+### 🟡 C-Kern-Implementierung (~75%)
 
 **Fehlend:**
 - [ ] Status-Transitions abfragen/validieren
 - [ ] Board_Statuses CRUD-Operationen
 - [ ] Ticket_Dependencies (Blocker) Logik
 - [ ] Ticket_Documents CRUD
-- [ ] Ticket_Comments CRUD
 - [ ] Fehlerbehandlung für SQL-Exceptions (z.B. "Illegaler Kanban-Move")
 - [ ] Transaktionsmanagement
+- [ ] Proper JSON-Parser (cJSON/jansson)
 
-### 🟡 MCP-Server (0%)
+**Neu implementiert:**
+- [x] Ticket Editing (Titel, Beschreibung)
+- [x] Kommentare/Work-Log CRUD
+- [x] Detailed Ticket View (mit Tasks + Kommentaren)
 
-**Geplant in `src/main.c` und `src/mcp/`:**
-- [ ] MCP-Protokoll-Parser (JSON-RPC über STDIN/STDOUT)
-- [ ] Tool-Dispatcher für kb.ai-Tools
-- [ ] Serialisierung/Deserialisierung von MCP-Nachrichten
-- [ ] Connection-Lifecycle-Management
+### 🟡 MCP-Server (~80%)
+
+**Implementiert in `src/main.c`:**
+- [x] MCP-Protokoll-Parser (JSON-RPC über STDIN/STDOUT)
+- [x] Tool-Dispatcher für kb.ai-Tools
+- [x] Serialisierung/Deserialisierung von MCP-Nachrichten (basic)
+- [x] Connection-Lifecycle-Management
+- [x] Server-Info Ausgabe
+
+**Fehlend:**
+- [ ] Proper JSON-Parser (cJSON/jansson)
+- [ ] Robustes Error-Handling
+- [ ] Input-Validierung
 
 ---
 
@@ -178,11 +201,19 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 |---------|--------------|----------------|
 | Alle Kanban-Tools | MCP-Tools für Projects, Tickets, Tasks, Status | MCP-Server |
 | Tool: kb.ai_create_project | Projekt anlegen | MCP-Server |
+| Tool: kb.ai_list_projects | Projekte auflisten | MCP-Server |
+| Tool: kb.ai_get_project | Projekt abrufen | MCP-Server |
 | Tool: kb.ai_create_ticket | Ticket anlegen | MCP-Server |
 | Tool: kb.ai_list_tickets | Tickets auflisten | MCP-Server |
-| Tool: kb.ai_move_ticket | Ticket-Status ändern | MCP-Server |
-| Tool: kb.ai_complete_task | Task abschließen | MCP-Server |
 | Tool: kb.ai_get_ticket | Ticket-Details | MCP-Server |
+| Tool: kb.ai_get_ticket_detailed | Ticket mit Tasks & Work-Log | MCP-Server |
+| Tool: kb.ai_move_ticket | Ticket-Status ändern | MCP-Server |
+| Tool: kb.ai_assign_ticket | Ticket zuweisen | MCP-Server |
+| Tool: kb.ai_update_ticket | Ticket bearbeiten (Titel/Beschreibung) | MCP-Server |
+| Tool: kb.ai_add_task | Task hinzufügen | MCP-Server |
+| Tool: kb.ai_complete_task | Task abschließen | MCP-Server |
+| Tool: kb.ai_add_comment | Work-Log Eintrag hinzufügen | MCP-Server |
+| Tool: kb.ai_list_comments | Work-Log anzeigen | MCP-Server |
 
 ### Phase 3: Erweiterte Features (Priorität: Mittel)
 

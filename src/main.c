@@ -5,6 +5,7 @@
 #include "db/connection.h"
 #include "kanban/projects.h"
 #include "kanban/tickets.h"
+#include "kanban/comments.h"
 
 // ============================================================================
 // MCP Protocol Constants
@@ -436,9 +437,195 @@ char* mcp_dispatch_tool(const char *request_id, const char *tool_name, const cha
         return mcp_tool_kb_ai_add_task(request_id, params_json);
     } else if (strcmp(tool_name, "kb.ai_complete_task") == 0) {
         return mcp_tool_kb_ai_complete_task(request_id, params_json);
+    } else if (strcmp(tool_name, "kb.ai_update_ticket") == 0) {
+        return mcp_tool_kb_ai_update_ticket(request_id, params_json);
+    } else if (strcmp(tool_name, "kb.ai_get_ticket_detailed") == 0) {
+        return mcp_tool_kb_ai_get_ticket_detailed(request_id, params_json);
+    } else if (strcmp(tool_name, "kb.ai_add_comment") == 0) {
+        return mcp_tool_kb_ai_add_comment(request_id, params_json);
+    } else if (strcmp(tool_name, "kb.ai_list_comments") == 0) {
+        return mcp_tool_kb_ai_list_comments(request_id, params_json);
     } else {
         return mcp_error(request_id, "Unknown tool");
     }
+}
+
+// ============================================================================
+// New MCP Tools: Ticket Editing and Work Log
+// ============================================================================
+
+char* mcp_tool_kb_ai_update_ticket(const char *request_id, const char *params_json) {
+    // Parse params: {"ticket_id": 1, "title": "...", "description": "..."}
+    int ticket_id = 0;
+    const char *title = NULL;
+    const char *description = NULL;
+    // Placeholder parsing
+    
+    if (!ticket_id) {
+        return mcp_error(request_id, "Missing required parameter: ticket_id");
+    }
+    
+    int updated = 0;
+    
+    if (title) {
+        updated += ticket_update_title(global_db, ticket_id, title);
+    }
+    
+    if (description != NULL) {
+        // description can be empty string to clear
+        updated += ticket_update_description(global_db, ticket_id, description);
+    }
+    
+    if (updated > 0) {
+        return mcp_response(request_id, "{\"success\":true,\"updated_fields\":true}");
+    }
+    
+    return mcp_response(request_id, "{\"success\":false,\"error\":\"No fields to update\"}");
+}
+
+char* mcp_tool_kb_ai_get_ticket_detailed(const char *request_id, const char *params_json) {
+    // Parse ticket_id from params
+    int ticket_id = 0;
+    // Placeholder parsing
+    
+    if (!ticket_id) {
+        return mcp_error(request_id, "Missing required parameter: ticket_id");
+    }
+    
+    TicketDetailed *detailed = ticket_get_detailed(global_db, ticket_id);
+    if (!detailed) {
+        return mcp_error(request_id, "Ticket not found");
+    }
+    
+    // Build comprehensive JSON response
+    char tasks_json[4096] = "";
+    if (detailed->tasks && detailed->tasks[0] != NULL) {
+        char *tptr = tasks_json;
+        tptr[0] = '[';
+        tptr[1] = '\0';
+        
+        bool first_task = true;
+        for (int i = 0; detailed->tasks[i] != NULL; i++) {
+            if (!first_task) {
+                strcat(tptr, ",");
+                tptr += strlen(tptr);
+            }
+            first_task = false;
+            
+            char item[512];
+            snprintf(item, sizeof(item),
+                "{\"id\":%d,\"title\":\"%s\",\"is_completed\":%s}",
+                detailed->tasks[i]->id, detailed->tasks[i]->title,
+                detailed->tasks[i]->is_completed ? "true" : "false");
+            strcat(tptr, item);
+            tptr += strlen(tptr);
+        }
+        strcat(tptr, "]");
+    }
+    
+    char comments_json[8192] = "";
+    if (detailed->comments && detailed->comments[0] != NULL) {
+        char *cptr = comments_json;
+        cptr[0] = '[';
+        cptr[1] = '\0';
+        
+        bool first_comment = true;
+        for (int i = 0; detailed->comments[i] != NULL; i++) {
+            if (!first_comment) {
+                strcat(cptr, ",");
+                cptr += strlen(cptr);
+            }
+            first_comment = false;
+            
+            char item[1024];
+            snprintf(item, sizeof(item),
+                "{\"id\":%d,\"author\":\"%s\",\"text\":\"%s\",\"created_at\":\"%s\"}",
+                detailed->comments[i]->id, detailed->comments[i]->author,
+                detailed->comments[i]->comment_text, "TODO"); // created_at placeholder
+            strcat(cptr, item);
+            cptr += strlen(cptr);
+        }
+        strcat(cptr, "]");
+    }
+    
+    char response[16384];
+    snprintf(response, sizeof(response),
+        "{\"ticket\":{\"id\":%d,\"title\":\"%s\",\"description\":\"%s\",\"status_id\":%d,\"assignee\":\"%s\"},\"tasks\":%s,\"comments\":%s}",
+        detailed->ticket->id,
+        detailed->ticket->title,
+        detailed->ticket->description ? detailed->ticket->description : "",
+        detailed->ticket->status_id,
+        detailed->ticket->assignee ? detailed->ticket->assignee : "",
+        tasks_json[0] ? tasks_json : "[]",
+        comments_json[0] ? comments_json : "[]");
+    
+    ticket_detailed_free(detailed);
+    return mcp_response(request_id, response);
+}
+
+char* mcp_tool_kb_ai_add_comment(const char *request_id, const char *params_json) {
+    // Parse params: {"ticket_id": 1, "author": "...", "text": "..."}
+    int ticket_id = 0;
+    const char *author = NULL;
+    const char *text = NULL;
+    // Placeholder parsing
+    
+    if (!ticket_id || !author || !text) {
+        return mcp_error(request_id, "Missing required parameters: ticket_id, author, text");
+    }
+    
+    TicketComment *comment = comment_add(global_db, ticket_id, author, text);
+    if (!comment) {
+        return mcp_error(request_id, "Failed to add comment");
+    }
+    
+    char response[1024];
+    snprintf(response, sizeof(response),
+        "{\"id\":%d,\"ticket_id\":%d,\"author\":\"%s\",\"text\":\"%s\"}",
+        comment->id, comment->ticket_id, comment->author, comment->comment_text);
+    
+    comment_free(comment);
+    return mcp_response(request_id, response);
+}
+
+char* mcp_tool_kb_ai_list_comments(const char *request_id, const char *params_json) {
+    // Parse ticket_id from params
+    int ticket_id = 0;
+    // Placeholder parsing
+    
+    if (!ticket_id) {
+        return mcp_error(request_id, "Missing required parameter: ticket_id");
+    }
+    
+    TicketComment **comments = comment_list_by_ticket(global_db, ticket_id);
+    if (!comments) {
+        return mcp_response(request_id, "[]");
+    }
+    
+    char buffer[8192];
+    char *ptr = buffer;
+    ptr[0] = '[';
+    ptr[1] = '\0';
+    
+    bool first = true;
+    for (int i = 0; comments[i] != NULL; i++) {
+        if (!first) {
+            strcat(ptr, ",");
+            ptr += strlen(ptr);
+        }
+        first = false;
+        
+        char item[1024];
+        snprintf(item, sizeof(item),
+            "{\"id\":%d,\"author\":\"%s\",\"text\":\"%s\"}",
+            comments[i]->id, comments[i]->author, comments[i]->comment_text);
+        strcat(ptr, item);
+        ptr += strlen(ptr);
+    }
+    strcat(ptr, "]");
+    
+    comment_free_array(comments);
+    return mcp_response(request_id, buffer);
 }
 
 // ============================================================================
@@ -561,10 +748,14 @@ void mcp_send_server_info() {
     printf("{\"name\":\"kb.ai_create_ticket\"},");
     printf("{\"name\":\"kb.ai_list_tickets\"},");
     printf("{\"name\":\"kb.ai_get_ticket\"},");
+    printf("{\"name\":\"kb.ai_get_ticket_detailed\"},");
     printf("{\"name\":\"kb.ai_move_ticket\"},");
     printf("{\"name\":\"kb.ai_assign_ticket\"},");
+    printf("{\"name\":\"kb.ai_update_ticket\"},");
     printf("{\"name\":\"kb.ai_add_task\"},");
-    printf("{\"name\":\"kb.ai_complete_task\"}");
+    printf("{\"name\":\"kb.ai_complete_task\"},");
+    printf("{\"name\":\"kb.ai_add_comment\"},");
+    printf("{\"name\":\"kb.ai_list_comments\"}");
     printf("]}}\n");
     fflush(stdout);
 }

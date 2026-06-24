@@ -64,13 +64,19 @@ kb.ai/
 │   │   ├── connection.c
 │   │   └── connection.h
 │   └── kanban/             # Kanban-Logik
-│       ├── tickets.c
+│       ├── tickets.c       # Tickets + Editing
 │       ├── tickets.h
 │       ├── projects.c
-│       └── projects.h
+│       ├── projects.h
+│       ├── comments.c     # Work-Log / Kommentare
+│       └── comments.h
 ├── include/                # Public Header
-│   └── db/
+│   ├── db/
+│   │   └── connection.h
 │   └── kanban/
+│       ├── tickets.h
+│       ├── projects.h
+│       └── comments.h
 ├── migrations/             # Datenbank-Migrationen
 │   └── V1__Initial_Multi_Project_Kanban_Schema.sql
 ├── flake.nix               # Nix Flake Build-Konfiguration
@@ -85,18 +91,35 @@ kb.ai/
 
 Der Server exponiert folgende Tools mit dem Präfix `kb.ai_`:
 
+### Projektverwaltung
 | Tool | Beschreibung |
 |------|--------------|
 | `kb.ai_create_project` | Projekt anlegen |
 | `kb.ai_list_projects` | Alle Projekte auflisten |
 | `kb.ai_get_project` | Projekt-Details abrufen |
+
+### Ticketverwaltung
+| Tool | Beschreibung |
+|------|--------------|
 | `kb.ai_create_ticket` | Ticket anlegen |
 | `kb.ai_list_tickets` | Tickets eines Projekts auflisten |
 | `kb.ai_get_ticket` | Ticket-Details abrufen |
+| `kb.ai_get_ticket_detailed` | **Ticket mit Tasks, Status UND Work-Log** |
 | `kb.ai_move_ticket` | Ticket-Status ändern |
 | `kb.ai_assign_ticket` | Ticket zuweisen |
+| `kb.ai_update_ticket` | **Ticket bearbeiten (Titel/Beschreibung)** |
+
+### Tasks (Akzeptanzkriterien)
+| Tool | Beschreibung |
+|------|--------------|
 | `kb.ai_add_task` | Task zu Ticket hinzufügen |
 | `kb.ai_complete_task` | Task abschließen |
+
+### Work-Log / Kommentare
+| Tool | Beschreibung |
+|------|--------------|
+| `kb.ai_add_comment` | **Work-Log Eintrag hinzufügen** |
+| `kb.ai_list_comments` | **Alle Work-Log Einträge eines Tickets** |
 
 ## Workflow
 

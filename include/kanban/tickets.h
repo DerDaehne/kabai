@@ -2,6 +2,7 @@
 #define KANBAN_TICKETS_H
 
 #include "db/connection.h"
+#include "comments.h"
 
 /**
  * @brief Ticket structure
@@ -24,6 +25,15 @@ typedef struct {
     char *title;
     int is_completed;
 } TicketTask;
+
+/**
+ * @brief Extended Ticket structure with tasks and comments
+ */
+typedef struct {
+    Ticket *ticket;
+    TicketTask **tasks;
+    TicketComment **comments;
+} TicketDetailed;
 
 /**
  * @brief Create a new ticket
@@ -75,6 +85,38 @@ int ticket_update_status(DatabaseConnection *db, int ticket_id, int new_status_i
  * @return 1 on success, 0 on failure
  */
 int ticket_assign(DatabaseConnection *db, int ticket_id, const char *assignee);
+
+/**
+ * @brief Update ticket title
+ * @param db Database connection
+ * @param ticket_id Ticket ID
+ * @param new_title New title
+ * @return 1 on success, 0 on failure
+ */
+int ticket_update_title(DatabaseConnection *db, int ticket_id, const char *new_title);
+
+/**
+ * @brief Update ticket description
+ * @param db Database connection
+ * @param ticket_id Ticket ID
+ * @param new_description New description
+ * @return 1 on success, 0 on failure
+ */
+int ticket_update_description(DatabaseConnection *db, int ticket_id, const char *new_description);
+
+/**
+ * @brief Get detailed ticket with tasks and comments (work log)
+ * @param db Database connection
+ * @param ticket_id Ticket ID
+ * @return TicketDetailed* or NULL if not found
+ */
+TicketDetailed* ticket_get_detailed(DatabaseConnection *db, int ticket_id);
+
+/**
+ * @brief Free detailed ticket
+ * @param detailed TicketDetailed to free
+ */
+void ticket_detailed_free(TicketDetailed *detailed);
 
 /**
  * @brief Add task to ticket
