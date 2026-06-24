@@ -8,12 +8,15 @@
  * @brief Ticket structure
  */
 typedef struct {
-    int id;
-    int project_id;
-    int status_id;
+    int   id;
+    int   project_id;
+    int   status_id;
     char *title;
     char *description;
     char *assignee;
+    /* Populated by ticket_get_by_id (via JOIN); NULL in list results */
+    char *status_name;
+    char *agent_role_instruction;
 } Ticket;
 
 /**
