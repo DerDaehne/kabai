@@ -743,7 +743,7 @@ void mcp_send_server_info() {
 
 int main(int argc, char *argv[]) {
     // Initialize cJSON hook for malloc/free
-    cJSON_Hooks hooks = {malloc, free, NULL};
+    cJSON_Hooks hooks = {malloc, free};
     cJSON_InitHooks(&hooks);
     
     // Initialize

@@ -1,5 +1,6 @@
 #include "../include/db/transaction.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 int db_begin_transaction(DatabaseConnection *db) {
