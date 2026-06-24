@@ -35,6 +35,7 @@
               -I${pkgs.cjson}/include \
               src/main.c \
               src/db/connection.c \
+              src/db/transaction.c \
               src/kanban/projects.c \
               src/kanban/tickets.c \
               src/kanban/comments.c \
@@ -82,6 +83,7 @@
               -I${pkgs.cjson}/include \
               src/main.c \
               src/db/connection.c \
+              src/db/transaction.c \
               src/kanban/projects.c \
               src/kanban/tickets.c \
               src/kanban/comments.c \
