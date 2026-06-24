@@ -9,7 +9,15 @@ on:
 jobs:
   build:
     runs-on: ci
+    container:
+      image: node:latest
     steps:
+      - name: Install Nix
+        run: |
+          curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon
+          mkdir -p ~/.config/nix
+          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+          echo "/root/.nix-profile/bin" >> $GITHUB_PATH
       - uses: actions/checkout@v4
       - name: Build
         run: nix build . --print-build-logs
