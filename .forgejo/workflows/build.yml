@@ -12,9 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        run: |
-          docker run --rm -v "$PWD:$PWD" -w "$PWD" nixos/nix:latest \
-            sh -c "nix build . --print-build-logs && cp -L result/bin/kbai ./kbai"
+        run: nix build . --print-build-logs
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -38,4 +36,4 @@ jobs:
             -H "Authorization: token $GITEA_TOKEN" \
             -H "Content-Type: application/octet-stream" \
             "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=kbai-linux-amd64" \
-            --data-binary @kbai
+            --data-binary @result/bin/kbai
