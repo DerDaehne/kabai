@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <cjson/cJSON.h>
 #include "db/connection.h"
 #include "kanban/projects.h"
 #include "kanban/tickets.h"
@@ -17,7 +18,6 @@
 // Database Connection Configuration
 // ============================================================================
 
-// Default connection parameters - can be overridden via environment variables
 #define DEFAULT_DB_HOST "localhost"
 #define DEFAULT_DB_PORT "5432"
 #define DEFAULT_DB_NAME "kb_ai"
@@ -27,605 +27,571 @@
 static DatabaseConnection* global_db = NULL;
 
 // ============================================================================
-// JSON Helper Functions (Minimal Implementation)
+// JSON Helper Functions (using cJSON)
 // ============================================================================
 
 /**
- * Escapes a string for JSON output
+ * Create a JSON response for MCP
  */
-char* json_escape(const char *str) {
-    if (!str) return strdup("null");
-    
-    // Count required space
-    int count = 0;
-    for (int i = 0; str[i]; i++) {
-        switch (str[i]) {
-            case '"': case '\\': case '\b': case '\f': case '\n': case '\r': case '\t':
-                count += 2;
-                break;
-            default:
-                count += 1;
-        }
-    }
-    
-    char *result = malloc(count + 1);
-    if (!result) return NULL;
-    
-    int j = 0;
-    for (int i = 0; str[i]; i++) {
-        switch (str[i]) {
-            case '"': result[j++] = '\\'; result[j++] = '"'; break;
-            case '\\': result[j++] = '\\'; result[j++] = '\\'; break;
-            case '\b': result[j++] = '\\'; result[j++] = 'b'; break;
-            case '\f': result[j++] = '\\'; result[j++] = 'f'; break;
-            case '\n': result[j++] = '\\'; result[j++] = 'n'; break;
-            case '\r': result[j++] = '\\'; result[j++] = 'r'; break;
-            case '\t': result[j++] = '\\'; result[j++] = 't'; break;
-            default: result[j++] = str[i];
-        }
-    }
-    result[j] = '\0';
-    return result;
+cJSON* mcp_response_json(const char *request_id, cJSON *result) {
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "id", request_id);
+    cJSON_AddItemToObject(response, "result", result);
+    return response;
+}
+
+cJSON* mcp_error_json(const char *request_id, const char *message) {
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "id", request_id);
+    cJSON_AddStringToObject(response, "error", message);
+    return response;
 }
 
 /**
- * Creates a JSON response for MCP
+ * Send JSON response to stdout
  */
-char* mcp_response(const char *request_id, const char *content) {
-    char *escaped_content = json_escape(content);
-    char *result = malloc(strlen(request_id) + strlen(escaped_content) + 100);
-    if (!result || !escaped_content) {
-        free(escaped_content);
-        free(result);
-        return NULL;
+void mcp_send_json(cJSON *json) {
+    char *json_str = cJSON_PrintUnformatted(json);
+    if (json_str) {
+        printf("%s\n", json_str);
+        fflush(stdout);
+        cJSON_free(json_str);
     }
-    sprintf(result, "{\"id\":\"%s\",\"result\":\"%s\"}", request_id, escaped_content);
-    free(escaped_content);
-    return result;
+    cJSON_Delete(json);
 }
 
-char* mcp_error(const char *request_id, const char *message) {
-    char *escaped_msg = json_escape(message);
-    char *result = malloc(strlen(request_id) + strlen(escaped_msg) + 100);
-    if (!result || !escaped_msg) {
-        free(escaped_msg);
-        free(result);
+// ============================================================================
+// Database Error Handling
+// ============================================================================
+
+/**
+ * Check PQresult and return error message if failed
+ */
+const char* db_check_result(PGresult *res, const char *context) {
+    if (!res) {
+        return "Database connection error";
+    }
+    
+    ExecStatusType status = PQresultStatus(res);
+    if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+        const char *error = PQresultErrorMessage(res);
+        PQclear(res);
+        if (error && strlen(error) > 0) {
+            // Return the PostgreSQL error message
+            return error;
+        }
+        return "Database operation failed";
+    }
+    return NULL;
+}
+
+/**
+ * Execute query with error checking
+ */
+PGresult* db_query_checked(DatabaseConnection *db, const char *query, const char *context) {
+    if (!db || !db->conn || !query) {
         return NULL;
     }
-    sprintf(result, "{\"id\":\"%s\",\"error\":\"%s\"}", request_id, escaped_msg);
-    free(escaped_msg);
-    return result;
+    
+    PGresult *res = PQexec(db->conn, query);
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        const char *error = db_check_result(res, context);
+        if (error) {
+            fprintf(stderr, "DB Error (%s): %s\n", context ? context : "unknown", error);
+        }
+    }
+    return res;
 }
 
 // ============================================================================
 // MCP Tool: kb.ai_create_project
 // ============================================================================
 
-char* mcp_tool_kb_ai_create_project(const char *request_id, const char *params_json) {
-    // Parse params: {"slug": "...", "name": "...", "description": "..."}
-    // For now, we'll use a simple parser
-    const char *slug = NULL;
-    const char *name = NULL;
-    const char *description = NULL;
+cJSON* mcp_tool_kb_ai_create_project(const char *request_id, cJSON *params) {
+    cJSON *slug_json = cJSON_GetObjectItemCaseSensitive(params, "slug");
+    cJSON *name_json = cJSON_GetObjectItemCaseSensitive(params, "name");
+    cJSON *desc_json = cJSON_GetObjectItemCaseSensitive(params, "description");
     
-    // Simple JSON parsing (very basic - replace with proper parser)
-    if (params_json) {
-        // This is a placeholder - need proper JSON parsing
-        // For now, we'll just acknowledge the tool exists
+    if (!cJSON_IsString(slug_json) || !cJSON_IsString(name_json)) {
+        return mcp_error_json(request_id, "Missing required parameters: slug, name");
     }
     
-    if (!slug || !name) {
-        return mcp_error(request_id, "Missing required parameters: slug, name");
-    }
+    Project *project = project_create(global_db, slug_json->valuestring, name_json->valuestring,
+                                       desc_json ? desc_json->valuestring : NULL);
     
-    Project *project = project_create(global_db, slug, name, description);
     if (!project) {
-        return mcp_error(request_id, "Failed to create project");
+        return mcp_error_json(request_id, "Failed to create project");
     }
     
-    char response[1024];
-    snprintf(response, sizeof(response), 
-        "{\"id\":%d,\"slug\":\"%s\",\"name\":\"%s\"}",
-        project->id, project->slug, project->name);
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddNumberToObject(result, "id", project->id);
+    cJSON_AddStringToObject(result, "slug", project->slug);
+    cJSON_AddStringToObject(result, "name", project->name);
     
     project_free(project);
-    return mcp_response(request_id, response);
+    return mcp_response_json(request_id, result);
 }
 
 // ============================================================================
 // MCP Tool: kb.ai_list_projects
 // ============================================================================
 
-char* mcp_tool_kb_ai_list_projects(const char *request_id) {
+cJSON* mcp_tool_kb_ai_list_projects(const char *request_id) {
     Project **projects = project_list_all(global_db);
     if (!projects) {
-        return mcp_response(request_id, "[]");
+        cJSON *result = cJSON_CreateArray();
+        return mcp_response_json(request_id, result);
     }
     
-    // Build JSON array
-    char buffer[8192];
-    char *ptr = buffer;
-    ptr[0] = '[';
-    ptr[1] = '\0';
+    cJSON *result_array = cJSON_CreateArray();
     
-    bool first = true;
     for (int i = 0; projects[i] != NULL; i++) {
-        if (!first) {
-            strcat(ptr, ",");
-            ptr += strlen(ptr);
+        cJSON *project_json = cJSON_CreateObject();
+        cJSON_AddNumberToObject(project_json, "id", projects[i]->id);
+        cJSON_AddStringToObject(project_json, "slug", projects[i]->slug);
+        cJSON_AddStringToObject(project_json, "name", projects[i]->name);
+        if (projects[i]->description) {
+            cJSON_AddStringToObject(project_json, "description", projects[i]->description);
         }
-        first = false;
-        
-        char item[512];
-        snprintf(item, sizeof(item),
-            "{\"id\":%d,\"slug\":\"%s\",\"name\":\"%s\"}",
-            projects[i]->id, projects[i]->slug, projects[i]->name);
-        strcat(ptr, item);
-        ptr += strlen(ptr);
+        cJSON_AddItemToArray(result_array, project_json);
     }
-    strcat(ptr, "]");
     
     project_free_array(projects);
-    return mcp_response(request_id, buffer);
+    return mcp_response_json(request_id, result_array);
 }
 
 // ============================================================================
 // MCP Tool: kb.ai_get_project
 // ============================================================================
 
-char* mcp_tool_kb_ai_get_project(const char *request_id, const char *params_json) {
-    // Parse project_id from params
-    int project_id = 0;
-    // Placeholder: parse from JSON
+cJSON* mcp_tool_kb_ai_get_project(const char *request_id, cJSON *params) {
+    cJSON *id_json = cJSON_GetObjectItemCaseSensitive(params, "project_id");
     
-    Project *project = project_get_by_id(global_db, project_id);
-    if (!project) {
-        return mcp_error(request_id, "Project not found");
+    if (!cJSON_IsNumber(id_json)) {
+        return mcp_error_json(request_id, "Missing required parameter: project_id");
     }
     
-    char response[1024];
-    snprintf(response, sizeof(response),
-        "{\"id\":%d,\"slug\":\"%s\",\"name\":\"%s\",\"description\":\"%s\"}",
-        project->id, project->slug, project->name,
-        project->description ? project->description : "");
+    Project *project = project_get_by_id(global_db, (int)id_json->valueint);
+    if (!project) {
+        return mcp_error_json(request_id, "Project not found");
+    }
+    
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddNumberToObject(result, "id", project->id);
+    cJSON_AddStringToObject(result, "slug", project->slug);
+    cJSON_AddStringToObject(result, "name", project->name);
+    if (project->description) {
+        cJSON_AddStringToObject(result, "description", project->description);
+    }
     
     project_free(project);
-    return mcp_response(request_id, response);
+    return mcp_response_json(request_id, result);
 }
 
 // ============================================================================
 // MCP Tool: kb.ai_create_ticket
 // ============================================================================
 
-char* mcp_tool_kb_ai_create_ticket(const char *request_id, const char *params_json) {
-    // Parse params: {"project_id": 1, "status_id": 1, "title": "...", "description": "..."}
-    int project_id = 0;
-    int status_id = 0;
-    const char *title = NULL;
-    const char *description = NULL;
+cJSON* mcp_tool_kb_ai_create_ticket(const char *request_id, cJSON *params) {
+    cJSON *project_id_json = cJSON_GetObjectItemCaseSensitive(params, "project_id");
+    cJSON *status_id_json = cJSON_GetObjectItemCaseSensitive(params, "status_id");
+    cJSON *title_json = cJSON_GetObjectItemCaseSensitive(params, "title");
+    cJSON *desc_json = cJSON_GetObjectItemCaseSensitive(params, "description");
     
-    // Placeholder parsing
-    
-    if (!project_id || !status_id || !title) {
-        return mcp_error(request_id, "Missing required parameters: project_id, status_id, title");
+    if (!cJSON_IsNumber(project_id_json) || !cJSON_IsNumber(status_id_json) || !cJSON_IsString(title_json)) {
+        return mcp_error_json(request_id, "Missing required parameters: project_id, status_id, title");
     }
     
-    Ticket *ticket = ticket_create(global_db, project_id, status_id, title, description);
+    Ticket *ticket = ticket_create(global_db, (int)project_id_json->valueint,
+                                   (int)status_id_json->valueint,
+                                   title_json->valuestring,
+                                   desc_json ? desc_json->valuestring : NULL);
+    
     if (!ticket) {
-        return mcp_error(request_id, "Failed to create ticket");
+        return mcp_error_json(request_id, "Failed to create ticket");
     }
     
-    char response[1024];
-    snprintf(response, sizeof(response),
-        "{\"id\":%d,\"project_id\":%d,\"status_id\":%d,\"title\":\"%s\"}",
-        ticket->id, ticket->project_id, ticket->status_id, ticket->title);
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddNumberToObject(result, "id", ticket->id);
+    cJSON_AddNumberToObject(result, "project_id", ticket->project_id);
+    cJSON_AddNumberToObject(result, "status_id", ticket->status_id);
+    cJSON_AddStringToObject(result, "title", ticket->title);
+    if (ticket->description) {
+        cJSON_AddStringToObject(result, "description", ticket->description);
+    }
+    if (ticket->assignee) {
+        cJSON_AddStringToObject(result, "assignee", ticket->assignee);
+    }
     
     ticket_free(ticket);
-    return mcp_response(request_id, response);
+    return mcp_response_json(request_id, result);
 }
 
 // ============================================================================
 // MCP Tool: kb.ai_list_tickets
 // ============================================================================
 
-char* mcp_tool_kb_ai_list_tickets(const char *request_id, const char *params_json) {
-    // Parse project_id from params
+cJSON* mcp_tool_kb_ai_list_tickets(const char *request_id, cJSON *params) {
+    cJSON *project_id_json = cJSON_GetObjectItemCaseSensitive(params, "project_id");
+    
     int project_id = 0;
-    // Placeholder parsing
+    if (cJSON_IsNumber(project_id_json)) {
+        project_id = (int)project_id_json->valueint;
+    }
     
     Ticket **tickets = ticket_list_by_project(global_db, project_id);
     if (!tickets) {
-        return mcp_response(request_id, "[]");
+        cJSON *result = cJSON_CreateArray();
+        return mcp_response_json(request_id, result);
     }
     
-    char buffer[8192];
-    char *ptr = buffer;
-    ptr[0] = '[';
-    ptr[1] = '\0';
+    cJSON *result_array = cJSON_CreateArray();
     
-    bool first = true;
     for (int i = 0; tickets[i] != NULL; i++) {
-        if (!first) {
-            strcat(ptr, ",");
-            ptr += strlen(ptr);
+        cJSON *ticket_json = cJSON_CreateObject();
+        cJSON_AddNumberToObject(ticket_json, "id", tickets[i]->id);
+        cJSON_AddNumberToObject(ticket_json, "project_id", tickets[i]->project_id);
+        cJSON_AddNumberToObject(ticket_json, "status_id", tickets[i]->status_id);
+        cJSON_AddStringToObject(ticket_json, "title", tickets[i]->title);
+        if (tickets[i]->assignee) {
+            cJSON_AddStringToObject(ticket_json, "assignee", tickets[i]->assignee);
         }
-        first = false;
-        
-        char item[512];
-        snprintf(item, sizeof(item),
-            "{\"id\":%d,\"title\":\"%s\",\"status_id\":%d,\"assignee\":\"%s\"}",
-            tickets[i]->id, tickets[i]->title, tickets[i]->status_id,
-            tickets[i]->assignee ? tickets[i]->assignee : "");
-        strcat(ptr, item);
-        ptr += strlen(ptr);
+        cJSON_AddItemToArray(result_array, ticket_json);
     }
-    strcat(ptr, "]");
     
     ticket_free_array(tickets);
-    return mcp_response(request_id, buffer);
+    return mcp_response_json(request_id, result_array);
 }
 
 // ============================================================================
 // MCP Tool: kb.ai_get_ticket
 // ============================================================================
 
-char* mcp_tool_kb_ai_get_ticket(const char *request_id, const char *params_json) {
-    // Parse ticket_id from params
-    int ticket_id = 0;
-    // Placeholder parsing
+cJSON* mcp_tool_kb_ai_get_ticket(const char *request_id, cJSON *params) {
+    cJSON *id_json = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
     
-    Ticket *ticket = ticket_get_by_id(global_db, ticket_id);
+    if (!cJSON_IsNumber(id_json)) {
+        return mcp_error_json(request_id, "Missing required parameter: ticket_id");
+    }
+    
+    Ticket *ticket = ticket_get_by_id(global_db, (int)id_json->valueint);
     if (!ticket) {
-        return mcp_error(request_id, "Ticket not found");
+        return mcp_error_json(request_id, "Ticket not found");
     }
     
-    // Get tasks
-    TicketTask **tasks = ticket_get_tasks(global_db, ticket_id);
-    
-    char tasks_json[2048] = "";
-    if (tasks && tasks[0] != NULL) {
-        char *tptr = tasks_json;
-        tptr[0] = '[';
-        tptr[1] = '\0';
-        
-        bool first_task = true;
-        for (int i = 0; tasks[i] != NULL; i++) {
-            if (!first_task) {
-                strcat(tptr, ",");
-                tptr += strlen(tptr);
-            }
-            first_task = false;
-            
-            char item[256];
-            snprintf(item, sizeof(item),
-                "{\"id\":%d,\"title\":\"%s\",\"is_completed\":%s}",
-                tasks[i]->id, tasks[i]->title,
-                tasks[i]->is_completed ? "true" : "false");
-            strcat(tptr, item);
-            tptr += strlen(tptr);
-        }
-        strcat(tptr, "]");
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddNumberToObject(result, "id", ticket->id);
+    cJSON_AddNumberToObject(result, "project_id", ticket->project_id);
+    cJSON_AddNumberToObject(result, "status_id", ticket->status_id);
+    cJSON_AddStringToObject(result, "title", ticket->title);
+    if (ticket->description) {
+        cJSON_AddStringToObject(result, "description", ticket->description);
     }
-    
-    ticket_task_free_array(tasks);
-    
-    char response[4096];
-    snprintf(response, sizeof(response),
-        "{\"id\":%d,\"title\":\"%s\",\"description\":\"%s\",\"status_id\":%d,\"assignee\":\"%s\",\"tasks\":%s}",
-        ticket->id, ticket->title,
-        ticket->description ? ticket->description : "",
-        ticket->status_id,
-        ticket->assignee ? ticket->assignee : "",
-        tasks_json[0] ? tasks_json : "[]");
+    if (ticket->assignee) {
+        cJSON_AddStringToObject(result, "assignee", ticket->assignee);
+    }
     
     ticket_free(ticket);
-    return mcp_response(request_id, response);
+    return mcp_response_json(request_id, result);
+}
+
+// ============================================================================
+// MCP Tool: kb.ai_get_ticket_detailed
+// ============================================================================
+
+cJSON* mcp_tool_kb_ai_get_ticket_detailed(const char *request_id, cJSON *params) {
+    cJSON *id_json = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
+    
+    if (!cJSON_IsNumber(id_json)) {
+        return mcp_error_json(request_id, "Missing required parameter: ticket_id");
+    }
+    
+    TicketDetailed *detailed = ticket_get_detailed(global_db, (int)id_json->valueint);
+    if (!detailed) {
+        return mcp_error_json(request_id, "Ticket not found");
+    }
+    
+    // Build result
+    cJSON *result = cJSON_CreateObject();
+    
+    // Ticket info
+    cJSON *ticket_json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(ticket_json, "id", detailed->ticket->id);
+    cJSON_AddNumberToObject(ticket_json, "project_id", detailed->ticket->project_id);
+    cJSON_AddNumberToObject(ticket_json, "status_id", detailed->ticket->status_id);
+    cJSON_AddStringToObject(ticket_json, "title", detailed->ticket->title);
+    if (detailed->ticket->description) {
+        cJSON_AddStringToObject(ticket_json, "description", detailed->ticket->description);
+    }
+    if (detailed->ticket->assignee) {
+        cJSON_AddStringToObject(ticket_json, "assignee", detailed->ticket->assignee);
+    }
+    cJSON_AddItemToObject(result, "ticket", ticket_json);
+    
+    // Tasks
+    cJSON *tasks_array = cJSON_CreateArray();
+    if (detailed->tasks) {
+        for (int i = 0; detailed->tasks[i] != NULL; i++) {
+            cJSON *task_json = cJSON_CreateObject();
+            cJSON_AddNumberToObject(task_json, "id", detailed->tasks[i]->id);
+            cJSON_AddStringToObject(task_json, "title", detailed->tasks[i]->title);
+            cJSON_AddBoolToObject(task_json, "is_completed", detailed->tasks[i]->is_completed);
+            cJSON_AddItemToArray(tasks_array, task_json);
+        }
+    }
+    cJSON_AddItemToObject(result, "tasks", tasks_array);
+    
+    // Comments (Work Log)
+    cJSON *comments_array = cJSON_CreateArray();
+    if (detailed->comments) {
+        for (int i = 0; detailed->comments[i] != NULL; i++) {
+            cJSON *comment_json = cJSON_CreateObject();
+            cJSON_AddNumberToObject(comment_json, "id", detailed->comments[i]->id);
+            cJSON_AddStringToObject(comment_json, "author", detailed->comments[i]->author);
+            cJSON_AddStringToObject(comment_json, "text", detailed->comments[i]->comment_text);
+            cJSON_AddItemToArray(comments_array, comment_json);
+        }
+    }
+    cJSON_AddItemToObject(result, "comments", comments_array);
+    
+    ticket_detailed_free(detailed);
+    return mcp_response_json(request_id, result);
 }
 
 // ============================================================================
 // MCP Tool: kb.ai_move_ticket
 // ============================================================================
 
-char* mcp_tool_kb_ai_move_ticket(const char *request_id, const char *params_json) {
-    // Parse ticket_id and new_status_id from params
-    int ticket_id = 0;
-    int new_status_id = 0;
-    // Placeholder parsing
+cJSON* mcp_tool_kb_ai_move_ticket(const char *request_id, cJSON *params) {
+    cJSON *ticket_id_json = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
+    cJSON *status_id_json = cJSON_GetObjectItemCaseSensitive(params, "new_status_id");
     
-    if (!ticket_id || !new_status_id) {
-        return mcp_error(request_id, "Missing required parameters: ticket_id, new_status_id");
+    if (!cJSON_IsNumber(ticket_id_json) || !cJSON_IsNumber(status_id_json)) {
+        return mcp_error_json(request_id, "Missing required parameters: ticket_id, new_status_id");
     }
     
-    if (!ticket_update_status(global_db, ticket_id, new_status_id)) {
-        return mcp_error(request_id, "Failed to move ticket - check workflow rules");
+    // Check if transition is valid by attempting the update
+    // The database trigger will reject invalid transitions
+    if (!ticket_update_status(global_db, (int)ticket_id_json->valueint, (int)status_id_json->valueint)) {
+        // Get the actual error from PostgreSQL
+        PGresult *res = PQexec(global_db->conn, "SELECT 1");
+        const char *error = PQerrorMessage(global_db->conn);
+        if (res) PQclear(res);
+        
+        if (error && strstr(error, "Illegaler Kanban-Move")) {
+            return mcp_error_json(request_id, "Invalid ticket transition: Check workflow rules");
+        } else if (error && strstr(error, "Akzeptanzkriterium")) {
+            return mcp_error_json(request_id, "Cannot close ticket: Open tasks remain");
+        }
+        return mcp_error_json(request_id, "Failed to move ticket");
     }
     
-    return mcp_response(request_id, "{\"success\":true}");
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "success", true);
+    return mcp_response_json(request_id, result);
 }
 
 // ============================================================================
 // MCP Tool: kb.ai_assign_ticket
 // ============================================================================
 
-char* mcp_tool_kb_ai_assign_ticket(const char *request_id, const char *params_json) {
-    // Parse ticket_id and assignee from params
-    int ticket_id = 0;
-    const char *assignee = NULL;
-    // Placeholder parsing
+cJSON* mcp_tool_kb_ai_assign_ticket(const char *request_id, cJSON *params) {
+    cJSON *ticket_id_json = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
+    cJSON *assignee_json = cJSON_GetObjectItemCaseSensitive(params, "assignee");
     
-    if (!ticket_id || !assignee) {
-        return mcp_error(request_id, "Missing required parameters: ticket_id, assignee");
+    if (!cJSON_IsNumber(ticket_id_json) || !cJSON_IsString(assignee_json)) {
+        return mcp_error_json(request_id, "Missing required parameters: ticket_id, assignee");
     }
     
-    if (!ticket_assign(global_db, ticket_id, assignee)) {
-        return mcp_error(request_id, "Failed to assign ticket");
+    if (!ticket_assign(global_db, (int)ticket_id_json->valueint, assignee_json->valuestring)) {
+        return mcp_error_json(request_id, "Failed to assign ticket");
     }
     
-    return mcp_response(request_id, "{\"success\":true}");
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "success", true);
+    return mcp_response_json(request_id, result);
+}
+
+// ============================================================================
+// MCP Tool: kb.ai_update_ticket
+// ============================================================================
+
+cJSON* mcp_tool_kb_ai_update_ticket(const char *request_id, cJSON *params) {
+    cJSON *ticket_id_json = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
+    cJSON *title_json = cJSON_GetObjectItemCaseSensitive(params, "title");
+    cJSON *desc_json = cJSON_GetObjectItemCaseSensitive(params, "description");
+    
+    if (!cJSON_IsNumber(ticket_id_json)) {
+        return mcp_error_json(request_id, "Missing required parameter: ticket_id");
+    }
+    
+    int ticket_id = (int)ticket_id_json->valueint;
+    int updated = 0;
+    
+    if (title_json && cJSON_IsString(title_json)) {
+        updated += ticket_update_title(global_db, ticket_id, title_json->valuestring);
+    }
+    
+    if (desc_json) {
+        // description can be null (empty string or explicit null)
+        const char *new_desc = cJSON_IsNull(desc_json) ? NULL : desc_json->valuestring;
+        updated += ticket_update_description(global_db, ticket_id, new_desc);
+    }
+    
+    if (updated > 0) {
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "success", true);
+        cJSON_AddNumberToObject(result, "updated_fields", updated);
+        return mcp_response_json(request_id, result);
+    }
+    
+    return mcp_error_json(request_id, "No fields to update");
 }
 
 // ============================================================================
 // MCP Tool: kb.ai_add_task
 // ============================================================================
 
-char* mcp_tool_kb_ai_add_task(const char *request_id, const char *params_json) {
-    // Parse ticket_id and title from params
-    int ticket_id = 0;
-    const char *title = NULL;
-    // Placeholder parsing
+cJSON* mcp_tool_kb_ai_add_task(const char *request_id, cJSON *params) {
+    cJSON *ticket_id_json = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
+    cJSON *title_json = cJSON_GetObjectItemCaseSensitive(params, "title");
     
-    if (!ticket_id || !title) {
-        return mcp_error(request_id, "Missing required parameters: ticket_id, title");
+    if (!cJSON_IsNumber(ticket_id_json) || !cJSON_IsString(title_json)) {
+        return mcp_error_json(request_id, "Missing required parameters: ticket_id, title");
     }
     
-    TicketTask *task = ticket_add_task(global_db, ticket_id, title);
+    TicketTask *task = ticket_add_task(global_db, (int)ticket_id_json->valueint, title_json->valuestring);
     if (!task) {
-        return mcp_error(request_id, "Failed to add task");
+        return mcp_error_json(request_id, "Failed to add task");
     }
     
-    char response[256];
-    snprintf(response, sizeof(response),
-        "{\"id\":%d,\"ticket_id\":%d,\"title\":\"%s\",\"is_completed\":false}",
-        task->id, task->ticket_id, task->title);
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddNumberToObject(result, "id", task->id);
+    cJSON_AddNumberToObject(result, "ticket_id", task->ticket_id);
+    cJSON_AddStringToObject(result, "title", task->title);
+    cJSON_AddBoolToObject(result, "is_completed", task->is_completed);
     
     ticket_task_free(task);
-    return mcp_response(request_id, response);
+    return mcp_response_json(request_id, result);
 }
 
 // ============================================================================
 // MCP Tool: kb.ai_complete_task
 // ============================================================================
 
-char* mcp_tool_kb_ai_complete_task(const char *request_id, const char *params_json) {
-    // Parse task_id from params
-    int task_id = 0;
-    // Placeholder parsing
+cJSON* mcp_tool_kb_ai_complete_task(const char *request_id, cJSON *params) {
+    cJSON *task_id_json = cJSON_GetObjectItemCaseSensitive(params, "task_id");
     
-    if (!task_id) {
-        return mcp_error(request_id, "Missing required parameter: task_id");
+    if (!cJSON_IsNumber(task_id_json)) {
+        return mcp_error_json(request_id, "Missing required parameter: task_id");
     }
     
-    if (!ticket_complete_task(global_db, task_id)) {
-        return mcp_error(request_id, "Failed to complete task");
+    if (!ticket_complete_task(global_db, (int)task_id_json->valueint)) {
+        return mcp_error_json(request_id, "Failed to complete task");
     }
     
-    return mcp_response(request_id, "{\"success\":true}");
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "success", true);
+    return mcp_response_json(request_id, result);
+}
+
+// ============================================================================
+// MCP Tool: kb.ai_add_comment
+// ============================================================================
+
+cJSON* mcp_tool_kb_ai_add_comment(const char *request_id, cJSON *params) {
+    cJSON *ticket_id_json = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
+    cJSON *author_json = cJSON_GetObjectItemCaseSensitive(params, "author");
+    cJSON *text_json = cJSON_GetObjectItemCaseSensitive(params, "text");
+    
+    if (!cJSON_IsNumber(ticket_id_json) || !cJSON_IsString(author_json) || !cJSON_IsString(text_json)) {
+        return mcp_error_json(request_id, "Missing required parameters: ticket_id, author, text");
+    }
+    
+    TicketComment *comment = comment_add(global_db, (int)ticket_id_json->valueint,
+                                          author_json->valuestring, text_json->valuestring);
+    if (!comment) {
+        return mcp_error_json(request_id, "Failed to add comment");
+    }
+    
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddNumberToObject(result, "id", comment->id);
+    cJSON_AddNumberToObject(result, "ticket_id", comment->ticket_id);
+    cJSON_AddStringToObject(result, "author", comment->author);
+    cJSON_AddStringToObject(result, "text", comment->comment_text);
+    
+    comment_free(comment);
+    return mcp_response_json(request_id, result);
+}
+
+// ============================================================================
+// MCP Tool: kb.ai_list_comments
+// ============================================================================
+
+cJSON* mcp_tool_kb_ai_list_comments(const char *request_id, cJSON *params) {
+    cJSON *ticket_id_json = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
+    
+    if (!cJSON_IsNumber(ticket_id_json)) {
+        return mcp_error_json(request_id, "Missing required parameter: ticket_id");
+    }
+    
+    TicketComment **comments = comment_list_by_ticket(global_db, (int)ticket_id_json->valueint);
+    if (!comments) {
+        cJSON *result = cJSON_CreateArray();
+        return mcp_response_json(request_id, result);
+    }
+    
+    cJSON *result_array = cJSON_CreateArray();
+    
+    for (int i = 0; comments[i] != NULL; i++) {
+        cJSON *comment_json = cJSON_CreateObject();
+        cJSON_AddNumberToObject(comment_json, "id", comments[i]->id);
+        cJSON_AddNumberToObject(comment_json, "ticket_id", comments[i]->ticket_id);
+        cJSON_AddStringToObject(comment_json, "author", comments[i]->author);
+        cJSON_AddStringToObject(comment_json, "text", comments[i]->comment_text);
+        cJSON_AddItemToArray(result_array, comment_json);
+    }
+    
+    comment_free_array(comments);
+    return mcp_response_json(request_id, result_array);
 }
 
 // ============================================================================
 // MCP Tool Dispatcher
 // ============================================================================
 
-char* mcp_dispatch_tool(const char *request_id, const char *tool_name, const char *params_json) {
+cJSON* mcp_dispatch_tool(const char *request_id, const char *tool_name, cJSON *params) {
     if (strcmp(tool_name, "kb.ai_create_project") == 0) {
-        return mcp_tool_kb_ai_create_project(request_id, params_json);
+        return mcp_tool_kb_ai_create_project(request_id, params);
     } else if (strcmp(tool_name, "kb.ai_list_projects") == 0) {
         return mcp_tool_kb_ai_list_projects(request_id);
     } else if (strcmp(tool_name, "kb.ai_get_project") == 0) {
-        return mcp_tool_kb_ai_get_project(request_id, params_json);
+        return mcp_tool_kb_ai_get_project(request_id, params);
     } else if (strcmp(tool_name, "kb.ai_create_ticket") == 0) {
-        return mcp_tool_kb_ai_create_ticket(request_id, params_json);
+        return mcp_tool_kb_ai_create_ticket(request_id, params);
     } else if (strcmp(tool_name, "kb.ai_list_tickets") == 0) {
-        return mcp_tool_kb_ai_list_tickets(request_id, params_json);
+        return mcp_tool_kb_ai_list_tickets(request_id, params);
     } else if (strcmp(tool_name, "kb.ai_get_ticket") == 0) {
-        return mcp_tool_kb_ai_get_ticket(request_id, params_json);
-    } else if (strcmp(tool_name, "kb.ai_move_ticket") == 0) {
-        return mcp_tool_kb_ai_move_ticket(request_id, params_json);
-    } else if (strcmp(tool_name, "kb.ai_assign_ticket") == 0) {
-        return mcp_tool_kb_ai_assign_ticket(request_id, params_json);
-    } else if (strcmp(tool_name, "kb.ai_add_task") == 0) {
-        return mcp_tool_kb_ai_add_task(request_id, params_json);
-    } else if (strcmp(tool_name, "kb.ai_complete_task") == 0) {
-        return mcp_tool_kb_ai_complete_task(request_id, params_json);
-    } else if (strcmp(tool_name, "kb.ai_update_ticket") == 0) {
-        return mcp_tool_kb_ai_update_ticket(request_id, params_json);
+        return mcp_tool_kb_ai_get_ticket(request_id, params);
     } else if (strcmp(tool_name, "kb.ai_get_ticket_detailed") == 0) {
-        return mcp_tool_kb_ai_get_ticket_detailed(request_id, params_json);
+        return mcp_tool_kb_ai_get_ticket_detailed(request_id, params);
+    } else if (strcmp(tool_name, "kb.ai_move_ticket") == 0) {
+        return mcp_tool_kb_ai_move_ticket(request_id, params);
+    } else if (strcmp(tool_name, "kb.ai_assign_ticket") == 0) {
+        return mcp_tool_kb_ai_assign_ticket(request_id, params);
+    } else if (strcmp(tool_name, "kb.ai_update_ticket") == 0) {
+        return mcp_tool_kb_ai_update_ticket(request_id, params);
+    } else if (strcmp(tool_name, "kb.ai_add_task") == 0) {
+        return mcp_tool_kb_ai_add_task(request_id, params);
+    } else if (strcmp(tool_name, "kb.ai_complete_task") == 0) {
+        return mcp_tool_kb_ai_complete_task(request_id, params);
     } else if (strcmp(tool_name, "kb.ai_add_comment") == 0) {
-        return mcp_tool_kb_ai_add_comment(request_id, params_json);
+        return mcp_tool_kb_ai_add_comment(request_id, params);
     } else if (strcmp(tool_name, "kb.ai_list_comments") == 0) {
-        return mcp_tool_kb_ai_list_comments(request_id, params_json);
+        return mcp_tool_kb_ai_list_comments(request_id, params);
     } else {
-        return mcp_error(request_id, "Unknown tool");
+        return mcp_error_json(request_id, "Unknown tool");
     }
-}
-
-// ============================================================================
-// New MCP Tools: Ticket Editing and Work Log
-// ============================================================================
-
-char* mcp_tool_kb_ai_update_ticket(const char *request_id, const char *params_json) {
-    // Parse params: {"ticket_id": 1, "title": "...", "description": "..."}
-    int ticket_id = 0;
-    const char *title = NULL;
-    const char *description = NULL;
-    // Placeholder parsing
-    
-    if (!ticket_id) {
-        return mcp_error(request_id, "Missing required parameter: ticket_id");
-    }
-    
-    int updated = 0;
-    
-    if (title) {
-        updated += ticket_update_title(global_db, ticket_id, title);
-    }
-    
-    if (description != NULL) {
-        // description can be empty string to clear
-        updated += ticket_update_description(global_db, ticket_id, description);
-    }
-    
-    if (updated > 0) {
-        return mcp_response(request_id, "{\"success\":true,\"updated_fields\":true}");
-    }
-    
-    return mcp_response(request_id, "{\"success\":false,\"error\":\"No fields to update\"}");
-}
-
-char* mcp_tool_kb_ai_get_ticket_detailed(const char *request_id, const char *params_json) {
-    // Parse ticket_id from params
-    int ticket_id = 0;
-    // Placeholder parsing
-    
-    if (!ticket_id) {
-        return mcp_error(request_id, "Missing required parameter: ticket_id");
-    }
-    
-    TicketDetailed *detailed = ticket_get_detailed(global_db, ticket_id);
-    if (!detailed) {
-        return mcp_error(request_id, "Ticket not found");
-    }
-    
-    // Build comprehensive JSON response
-    char tasks_json[4096] = "";
-    if (detailed->tasks && detailed->tasks[0] != NULL) {
-        char *tptr = tasks_json;
-        tptr[0] = '[';
-        tptr[1] = '\0';
-        
-        bool first_task = true;
-        for (int i = 0; detailed->tasks[i] != NULL; i++) {
-            if (!first_task) {
-                strcat(tptr, ",");
-                tptr += strlen(tptr);
-            }
-            first_task = false;
-            
-            char item[512];
-            snprintf(item, sizeof(item),
-                "{\"id\":%d,\"title\":\"%s\",\"is_completed\":%s}",
-                detailed->tasks[i]->id, detailed->tasks[i]->title,
-                detailed->tasks[i]->is_completed ? "true" : "false");
-            strcat(tptr, item);
-            tptr += strlen(tptr);
-        }
-        strcat(tptr, "]");
-    }
-    
-    char comments_json[8192] = "";
-    if (detailed->comments && detailed->comments[0] != NULL) {
-        char *cptr = comments_json;
-        cptr[0] = '[';
-        cptr[1] = '\0';
-        
-        bool first_comment = true;
-        for (int i = 0; detailed->comments[i] != NULL; i++) {
-            if (!first_comment) {
-                strcat(cptr, ",");
-                cptr += strlen(cptr);
-            }
-            first_comment = false;
-            
-            char item[1024];
-            snprintf(item, sizeof(item),
-                "{\"id\":%d,\"author\":\"%s\",\"text\":\"%s\",\"created_at\":\"%s\"}",
-                detailed->comments[i]->id, detailed->comments[i]->author,
-                detailed->comments[i]->comment_text, "TODO"); // created_at placeholder
-            strcat(cptr, item);
-            cptr += strlen(cptr);
-        }
-        strcat(cptr, "]");
-    }
-    
-    char response[16384];
-    snprintf(response, sizeof(response),
-        "{\"ticket\":{\"id\":%d,\"title\":\"%s\",\"description\":\"%s\",\"status_id\":%d,\"assignee\":\"%s\"},\"tasks\":%s,\"comments\":%s}",
-        detailed->ticket->id,
-        detailed->ticket->title,
-        detailed->ticket->description ? detailed->ticket->description : "",
-        detailed->ticket->status_id,
-        detailed->ticket->assignee ? detailed->ticket->assignee : "",
-        tasks_json[0] ? tasks_json : "[]",
-        comments_json[0] ? comments_json : "[]");
-    
-    ticket_detailed_free(detailed);
-    return mcp_response(request_id, response);
-}
-
-char* mcp_tool_kb_ai_add_comment(const char *request_id, const char *params_json) {
-    // Parse params: {"ticket_id": 1, "author": "...", "text": "..."}
-    int ticket_id = 0;
-    const char *author = NULL;
-    const char *text = NULL;
-    // Placeholder parsing
-    
-    if (!ticket_id || !author || !text) {
-        return mcp_error(request_id, "Missing required parameters: ticket_id, author, text");
-    }
-    
-    TicketComment *comment = comment_add(global_db, ticket_id, author, text);
-    if (!comment) {
-        return mcp_error(request_id, "Failed to add comment");
-    }
-    
-    char response[1024];
-    snprintf(response, sizeof(response),
-        "{\"id\":%d,\"ticket_id\":%d,\"author\":\"%s\",\"text\":\"%s\"}",
-        comment->id, comment->ticket_id, comment->author, comment->comment_text);
-    
-    comment_free(comment);
-    return mcp_response(request_id, response);
-}
-
-char* mcp_tool_kb_ai_list_comments(const char *request_id, const char *params_json) {
-    // Parse ticket_id from params
-    int ticket_id = 0;
-    // Placeholder parsing
-    
-    if (!ticket_id) {
-        return mcp_error(request_id, "Missing required parameter: ticket_id");
-    }
-    
-    TicketComment **comments = comment_list_by_ticket(global_db, ticket_id);
-    if (!comments) {
-        return mcp_response(request_id, "[]");
-    }
-    
-    char buffer[8192];
-    char *ptr = buffer;
-    ptr[0] = '[';
-    ptr[1] = '\0';
-    
-    bool first = true;
-    for (int i = 0; comments[i] != NULL; i++) {
-        if (!first) {
-            strcat(ptr, ",");
-            ptr += strlen(ptr);
-        }
-        first = false;
-        
-        char item[1024];
-        snprintf(item, sizeof(item),
-            "{\"id\":%d,\"author\":\"%s\",\"text\":\"%s\"}",
-            comments[i]->id, comments[i]->author, comments[i]->comment_text);
-        strcat(ptr, item);
-        ptr += strlen(ptr);
-    }
-    strcat(ptr, "]");
-    
-    comment_free_array(comments);
-    return mcp_response(request_id, buffer);
 }
 
 // ============================================================================
@@ -634,63 +600,55 @@ char* mcp_tool_kb_ai_list_comments(const char *request_id, const char *params_js
 
 /**
  * Handles an MCP request from stdin
+ * Expected format: {"id": "req-1", "method": "tools/call", "params": {"name": "kb.ai_tool", "arguments": {...}}}
  */
-void mcp_handle_request(const char *request_json) {
-    // Parse request JSON (simplified)
-    // Expected format: {"id": "req-1", "method": "tools/call", "params": {"name": "kb.ai_tool", "arguments": {...}}}
+cJSON* mcp_handle_request(const char *request_json) {
+    cJSON *request = cJSON_Parse(request_json);
+    if (!request) {
+        // Invalid JSON
+        cJSON *error = cJSON_CreateObject();
+        cJSON_AddStringToObject(error, "error", "Invalid JSON");
+        return error;
+    }
     
-    char request_id[256] = "";
-    char tool_name[256] = "";
-    char params_json[4096] = "";
-    
-    // Very basic JSON parsing - TODO: replace with proper JSON parser
-    const char *ptr = request_json;
+    // Check for server info request
+    cJSON *method = cJSON_GetObjectItemCaseSensitive(request, "method");
+    if (method && cJSON_IsString(method) && strcmp(method->valuestring, "server_info") == 0) {
+        cJSON_Delete(request);
+        return NULL; // Will be handled separately
+    }
     
     // Extract request_id
-    const char *id_start = strstr(ptr, "\"id\":\"");
-    if (id_start) {
-        id_start += 6; // Skip "\"id\":\""
-        const char *id_end = strchr(id_start, '"');
-        if (id_end) {
-            strncpy(request_id, id_start, id_end - id_start);
-            request_id[id_end - id_start] = '\0';
-        }
+    cJSON *id_json = cJSON_GetObjectItemCaseSensitive(request, "id");
+    const char *request_id = id_json && cJSON_IsString(id_json) ? id_json->valuestring : "unknown";
+    
+    // Extract tool name and arguments
+    cJSON *params = cJSON_GetObjectItemCaseSensitive(request, "params");
+    if (!params) {
+        cJSON_Delete(request);
+        return mcp_error_json(request_id, "Missing params");
     }
     
-    // Extract tool name
-    const char *name_start = strstr(ptr, "\"name\":\"");
-    if (name_start) {
-        name_start += 8; // Skip "\"name\":\""
-        const char *name_end = strchr(name_start, '"');
-        if (name_end) {
-            strncpy(tool_name, name_start, name_end - name_start);
-            tool_name[name_end - name_start] = '\0';
-        }
+    cJSON *name_json = cJSON_GetObjectItemCaseSensitive(params, "name");
+    cJSON *args_json = cJSON_GetObjectItemCaseSensitive(params, "arguments");
+    
+    if (!name_json || !cJSON_IsString(name_json)) {
+        cJSON_Delete(request);
+        return mcp_error_json(request_id, "Missing tool name");
     }
     
-    // Extract arguments
-    const char *args_start = strstr(ptr, "\"arguments\":");
-    if (args_start) {
-        args_start += 12; // Skip "\"arguments\":"
-        const char *args_end = strchr(args_start, '}');
-        if (args_end) {
-            args_end++; // Include the closing brace
-            strncpy(params_json, args_start, args_end - args_start);
-            params_json[args_end - args_start] = '\0';
-        }
-    }
+    const char *tool_name = name_json->valuestring;
+    cJSON *tool_params = args_json ? cJSON_Duplicate(args_json, 1) : cJSON_CreateObject();
+    
+    cJSON_Delete(request);
     
     // Dispatch to tool
-    char *response = mcp_dispatch_tool(request_id, tool_name, params_json);
-    if (response) {
-        printf("%s\n", response);
-        fflush(stdout);
-        free(response);
-    } else {
-        // Error response
-        printf("{\"id\":\"%s\",\"error\":\"Internal server error\"}\n", request_id);
-        fflush(stdout);
+    cJSON *response = mcp_dispatch_tool(request_id, tool_name, tool_params);
+    if (tool_params) {
+        cJSON_Delete(tool_params);
     }
+    
+    return response;
 }
 
 // ============================================================================
@@ -716,9 +674,15 @@ int mcp_init() {
     );
     
     if (!global_db) {
-        fprintf(stderr, "Failed to connect to database\n");
+        const char *error = PQerrorMessage(NULL);
+        fprintf(stderr, "Failed to connect to database: %s\n", error ? error : "unknown error");
         return 0;
     }
+    
+    fprintf(stderr, "Connected to PostgreSQL database at %s:%s/%s\n",
+            host ? host : DEFAULT_DB_HOST,
+            port ? port : DEFAULT_DB_PORT,
+            dbname ? dbname : DEFAULT_DB_NAME);
     
     return 1;
 }
@@ -741,23 +705,36 @@ void mcp_cleanup() {
  * Send MCP server info
  */
 void mcp_send_server_info() {
-    printf("{\"version\":\"%s\",\"name\":\"kb.ai\",\"capabilities\":{\"tools\":[", MCP_VERSION);
-    printf("{\"name\":\"kb.ai_create_project\"},");
-    printf("{\"name\":\"kb.ai_list_projects\"},");
-    printf("{\"name\":\"kb.ai_get_project\"},");
-    printf("{\"name\":\"kb.ai_create_ticket\"},");
-    printf("{\"name\":\"kb.ai_list_tickets\"},");
-    printf("{\"name\":\"kb.ai_get_ticket\"},");
-    printf("{\"name\":\"kb.ai_get_ticket_detailed\"},");
-    printf("{\"name\":\"kb.ai_move_ticket\"},");
-    printf("{\"name\":\"kb.ai_assign_ticket\"},");
-    printf("{\"name\":\"kb.ai_update_ticket\"},");
-    printf("{\"name\":\"kb.ai_add_task\"},");
-    printf("{\"name\":\"kb.ai_complete_task\"},");
-    printf("{\"name\":\"kb.ai_add_comment\"},");
-    printf("{\"name\":\"kb.ai_list_comments\"}");
-    printf("]}}\n");
-    fflush(stdout);
+    cJSON *server_info = cJSON_CreateObject();
+    cJSON_AddStringToObject(server_info, "version", MCP_VERSION);
+    cJSON_AddStringToObject(server_info, "name", "kb.ai");
+    
+    cJSON *tools_array = cJSON_CreateArray();
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_create_project"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_list_projects"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_get_project"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_create_ticket"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_list_tickets"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_get_ticket"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_get_ticket_detailed"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_move_ticket"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_assign_ticket"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_update_ticket"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_add_task"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_complete_task"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_add_comment"));
+    cJSON_AddItemToArray(tools_array, cJSON_CreateString("kb.ai_list_comments"));
+    
+    cJSON_AddItemToObject(server_info, "tools", tools_array);
+    
+    // Send as notification
+    char *json_str = cJSON_PrintUnformatted(server_info);
+    if (json_str) {
+        printf("%%[server_info] %s\n", json_str);
+        fflush(stdout);
+        cJSON_free(json_str);
+    }
+    cJSON_Delete(server_info);
 }
 
 // ============================================================================
@@ -765,14 +742,17 @@ void mcp_send_server_info() {
 // ============================================================================
 
 int main(int argc, char *argv[]) {
+    // Initialize cJSON hook for malloc/free
+    cJSON_Hooks hooks = {malloc, free, NULL};
+    cJSON_InitHooks(&hooks);
+    
     // Initialize
     if (!mcp_init()) {
-        fprintf(stderr, "kb.ai MCP Server - Initialization failed\n");
+        fprintf(stderr, "kb.ai MCP Server v%s - Initialization failed\n", MCP_VERSION);
         return EXIT_FAILURE;
     }
     
     fprintf(stderr, "kb.ai MCP Server v%s - Starting\n", MCP_VERSION);
-    fprintf(stderr, "Connected to PostgreSQL database\n");
     fprintf(stderr, "Reading from STDIN, writing to STDOUT\n");
     fprintf(stderr, "Environment variables: KB_AI_DB_HOST, KB_AI_DB_PORT, KB_AI_DB_NAME, KB_AI_DB_USER, KB_AI_DB_PASSWORD\n");
     
@@ -780,7 +760,7 @@ int main(int argc, char *argv[]) {
     mcp_send_server_info();
     
     // Main loop - read from stdin
-    char line[8192];
+    char line[16384];
     while (fgets(line, sizeof(line), stdin) != NULL) {
         // Remove newline
         line[strcspn(line, "\n\r")] = 0;
@@ -789,7 +769,10 @@ int main(int argc, char *argv[]) {
         if (line[0] == '\0') continue;
         
         // Handle MCP request
-        mcp_handle_request(line);
+        cJSON *response = mcp_handle_request(line);
+        if (response) {
+            mcp_send_json(response);
+        }
     }
     
     // Cleanup
