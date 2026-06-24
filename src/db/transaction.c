@@ -1,4 +1,4 @@
-#include "../include/db/transaction.h"
+#include "db/transaction.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,17 +90,5 @@ int db_in_transaction(DatabaseConnection *db) {
         return 0;
     }
     
-    // Query the current transaction status
-    PGresult *res = PQexec(db->conn, 
-        "SELECT COUNT(*) FROM pg_stat_activity WHERE pid = pg_backend_pid() AND state = 'idle in transaction'");
-    
-    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
-        if (res) PQclear(res);
-        return 0;
-    }
-    
-    int count = atoi(PQgetvalue(res, 0, 0));
-    PQclear(res);
-    
-    return count > 0;
+    return PQtransactionStatus(db->conn) == PQTRANS_INTRANS;
 }

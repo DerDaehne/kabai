@@ -4,7 +4,9 @@
 *.so
 *.exe
 build/
-result/
+
+# Nix build result (symlink to /nix/store)
+result
 
 # Nix
 .nix-chicken/
@@ -32,4 +34,3 @@ logs/
 # Environment
 .env
 .env.local
-result/

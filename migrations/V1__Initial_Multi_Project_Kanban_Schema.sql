@@ -29,8 +29,8 @@ CREATE TABLE status_transitions (
     to_status_id INT NOT NULL REFERENCES board_statuses(id) ON DELETE CASCADE,
     PRIMARY KEY (project_id, from_status_id, to_status_id),
     -- Verify that both statuses belong to the exact same project
-    CONSTRAINT check_same_project_from FOREIGN KEY (project_id, from_status_id) REFERENCES board_statuses(project_id, name),
-    CONSTRAINT check_same_project_to FOREIGN KEY (project_id, to_status_id) REFERENCES board_statuses(project_id, name)
+    CONSTRAINT check_same_project_from FOREIGN KEY (project_id, from_status_id) REFERENCES board_statuses(project_id, id),
+    CONSTRAINT check_same_project_to FOREIGN KEY (project_id, to_status_id) REFERENCES board_statuses(project_id, id)
 );
 
 -- 4. TICKETS TABLE

@@ -1,7 +1,7 @@
 # Projektstatus: kb.ai / ForgeKan
 
 > **Stand: 24. Juni 2026**  
-> **Version: 0.1.0 (Initial Setup)**
+> **Version: 0.1.1 (Code-Review & Aufräumarbeiten)**
 
 Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 
@@ -19,9 +19,9 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 |-----------|--------|-------------|
 | **Projekt-Infrastruktur** | ✅ Fertig | 100% |
 | **Datenbank-Schema** | ✅ Fertig | 100% |
-| **C-Kern-Implementierung** | 🟡 Teilweise | ~60% |
+| **C-Kern-Implementierung** | 🟡 Teilweise | ~85% |
 | **Build-System (Nix Flake)** | ✅ Fertig | 100% |
-| **MCP-Server** | ❌ Nicht begonnen | 0% |
+| **MCP-Server** | ✅ Fertig | 100% |
 | **Statisch gelinkte Binaries** | ❌ Nicht begonnen | 0% |
 
 ---
@@ -260,26 +260,25 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 
 ### ⚠️ Bekannte Probleme
 
-1. **Keine Fehlerbehandlung für SQL-Exceptions**
-   - Der Trigger wirft Exceptions (z.B. "Illegaler Kanban-Move")
-   - Die C-Implementierung fängt diese nicht ab
-   - **Lösung:** PQresult Error-Messages parsen
+1. **Kein Connection Pooling**
+   - Jede Nutzung öffnet eine neue Verbindung
+   - **Lösung:** Connection-Pool implementieren (Phase 5)
 
-2. **Keine Validierung vor DB-Operationen**
-   - Client prüft nicht, ob Status-Übergang erlaubt ist
-   - **Lösung:** Status-Transitions vor Update abfragen
+2. **Keine Tests**
+   - Unit- und Integrationstests fehlen vollständig
+   - **Lösung:** Test-Framework einrichten (Phase 4)
 
-3. **Kein Connection Pooling**
-   - Jede Operation öffnet neue Verbindung
-   - **Lösung:** Connection-Pool implementieren
+### ✅ Behobene Probleme (v0.1.1)
 
-4. **Keine Memory-Safety Checks**
-   - Keine NULL-Checks in allen Pfaden
-   - **Lösung:** Defensive Programmierung
-
-5. **Keine Transaktionen**
-   - Einzelne Operationen sind nicht atomar
-   - **Lösung:** BEGIN/COMMIT/ROLLBACK
+1. **SQL Schema FOREIGN KEY Typkonflikt** — `status_transitions` referenzierte `board_statuses(project_id, name)` statt `(project_id, id)` (INT vs VARCHAR) → Migration fehlgeschlagen
+2. **Use-After-Free in `db_check_result`** — `PQclear(res)` gefolgt von `return PQresultErrorMessage(res)` (dangling pointer)
+3. **Double-Free in `db_query_checked`** — Gab gefreeten `PGresult*` an Aufrufer zurück
+4. **`db_in_transaction` benötigte Superuser** — Query auf `pg_stat_activity` ersetzt durch `PQtransactionStatus()`
+5. **Inkonsistente Include-Pfade** — relativer `"../include/"` vs `-I.`-basierte Pfade vereinheitlicht
+6. **Redundanter Dateiname** — `migrations/migrations_V1__...sql` → `migrations/V1__...sql`
+7. **Fehlerbehandlung `mcp_move_ticket`** — `PQerrorMessage` wurde durch `SELECT 1` überschrieben
+8. **Fehlende Validierung** — `ticket_create` prüft jetzt Existenz von project_id/status_id vor INSERT
+9. **Fehler-Logging** — `db_query` logged jetzt Fehler auf stderr
 
 ### ⚠️ Build-Issues
 
@@ -371,14 +370,13 @@ psql -U postgres -d kb_ai
 | Datum | Version | Änderungen |
 |-------|---------|------------|
 | 24.06.2026 | 0.1.0 | Initial Setup: C-Projektstruktur, Nix Flake, DB-Schema |
+| 24.06.2026 | 0.1.1 | Code-Review: 9 Bugs/Issues gefixt, Struktur aufgeräumt, .editorconfig |
 
 ---
 
 ## Offene Fragen
 
-1. **Welche C-Bibliothek für JSON-Parsing?** (jansson, cJSON, oder eigene Implementierung)
-   - Aktuell: Eigenes minimalistisches Parsing (für schneller Start)
-   - Empfohlen: cJSON oder jansson für Robustheit
+1. **Test-Framework** — Noch kein Framework für C-Unit-Tests festgelegt
 
 ## Entscheidungen
 

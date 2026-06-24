@@ -1,4 +1,4 @@
-#include "../include/kanban/comments.h"
+#include "kanban/comments.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

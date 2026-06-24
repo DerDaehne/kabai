@@ -1,9 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../include/kanban/tickets.h"
-#include "../include/kanban/comments.h"
-#include "../include/db/connection.h"
+#include "kanban/tickets.h"
+#include "kanban/comments.h"
+#include "db/connection.h"
 
 // ============================================================================
 // TicketDetailed functions
@@ -44,6 +44,30 @@ void ticket_detailed_free(TicketDetailed *detailed) {
     free(detailed);
 }
 
+static int project_exists(DatabaseConnection *db, int project_id) {
+    char query[64];
+    snprintf(query, sizeof(query), "SELECT 1 FROM projects WHERE id = %d", project_id);
+    PGresult *res = db_query(db, query);
+    if (!res || PQntuples(res) == 0) {
+        if (res) PQclear(res);
+        return 0;
+    }
+    PQclear(res);
+    return 1;
+}
+
+static int status_exists(DatabaseConnection *db, int status_id) {
+    char query[64];
+    snprintf(query, sizeof(query), "SELECT 1 FROM board_statuses WHERE id = %d", status_id);
+    PGresult *res = db_query(db, query);
+    if (!res || PQntuples(res) == 0) {
+        if (res) PQclear(res);
+        return 0;
+    }
+    PQclear(res);
+    return 1;
+}
+
 Ticket* ticket_create(
     DatabaseConnection *db,
     int project_id,
@@ -52,6 +76,15 @@ Ticket* ticket_create(
     const char *description
 ) {
     if (!db || !title) {
+        return NULL;
+    }
+    
+    if (!project_exists(db, project_id)) {
+        fprintf(stderr, "ticket_create: project %d does not exist\n", project_id);
+        return NULL;
+    }
+    if (!status_exists(db, status_id)) {
+        fprintf(stderr, "ticket_create: status %d does not exist\n", status_id);
         return NULL;
     }
     
@@ -208,8 +241,10 @@ int ticket_update_status(DatabaseConnection *db, int ticket_id, int new_status_i
         return 0;
     }
     
+    int affected = atoi(PQcmdTuples(res));
     PQclear(res);
-    return 1;
+    
+    return affected > 0;
 }
 
 int ticket_assign(DatabaseConnection *db, int ticket_id, const char *assignee) {

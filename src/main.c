@@ -65,40 +65,38 @@ void mcp_send_json(cJSON *json) {
 // ============================================================================
 
 /**
- * Check PQresult and return error message if failed
+ * Check if a PGresult indicates an error and log it
+ * Returns 1 if error, 0 if OK
  */
-const char* db_check_result(PGresult *res, const char *context) {
+static int db_check_and_log(PGresult *res, const char *context) {
     if (!res) {
-        return "Database connection error";
+        fprintf(stderr, "DB Error (%s): %s\n", context ? context : "unknown", "Database connection error");
+        return 1;
     }
     
     ExecStatusType status = PQresultStatus(res);
     if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
         const char *error = PQresultErrorMessage(res);
-        PQclear(res);
-        if (error && strlen(error) > 0) {
-            // Return the PostgreSQL error message
-            return error;
-        }
-        return "Database operation failed";
+        fprintf(stderr, "DB Error (%s): %s\n", context ? context : "unknown",
+                error && strlen(error) > 0 ? error : "Database operation failed");
+        return 1;
     }
-    return NULL;
+    return 0;
 }
 
 /**
- * Execute query with error checking
+ * Execute query with error checking and cleanup on failure
  */
 PGresult* db_query_checked(DatabaseConnection *db, const char *query, const char *context) {
     if (!db || !db->conn || !query) {
+        fprintf(stderr, "DB Error (%s): %s\n", context ? context : "unknown", "Invalid arguments");
         return NULL;
     }
     
     PGresult *res = PQexec(db->conn, query);
-    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
-        const char *error = db_check_result(res, context);
-        if (error) {
-            fprintf(stderr, "DB Error (%s): %s\n", context ? context : "unknown", error);
-        }
+    if (db_check_and_log(res, context)) {
+        if (res) PQclear(res);
+        return NULL;
     }
     return res;
 }
@@ -373,14 +371,12 @@ cJSON* mcp_tool_kb_ai_move_ticket(const char *request_id, cJSON *params) {
     // Check if transition is valid by attempting the update
     // The database trigger will reject invalid transitions
     if (!ticket_update_status(global_db, (int)ticket_id_json->valueint, (int)status_id_json->valueint)) {
-        // Get the actual error from PostgreSQL
-        PGresult *res = PQexec(global_db->conn, "SELECT 1");
-        const char *error = PQerrorMessage(global_db->conn);
-        if (res) PQclear(res);
+        // Save error BEFORE running any other query (PQerrorMessage is per-connection)
+        const char *raw_error = PQerrorMessage(global_db->conn);
         
-        if (error && strstr(error, "Illegaler Kanban-Move")) {
+        if (raw_error && strstr(raw_error, "Illegaler Kanban-Move")) {
             return mcp_error_json(request_id, "Invalid ticket transition: Check workflow rules");
-        } else if (error && strstr(error, "Akzeptanzkriterium")) {
+        } else if (raw_error && strstr(raw_error, "Akzeptanzkriterium")) {
             return mcp_error_json(request_id, "Cannot close ticket: Open tasks remain");
         }
         return mcp_error_json(request_id, "Failed to move ticket");

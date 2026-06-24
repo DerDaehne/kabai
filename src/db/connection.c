@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include "../include/db/connection.h"
+#include "db/connection.h"
 
 DatabaseConnection* db_connect(
     const char *host,
@@ -49,10 +48,22 @@ void db_disconnect(DatabaseConnection *db) {
 
 PGresult* db_query(DatabaseConnection *db, const char *query) {
     if (!db || !db->conn || !query) {
+        fprintf(stderr, "db_query: invalid arguments\n");
         return NULL;
     }
     
-    return PQexec(db->conn, query);
+    PGresult *res = PQexec(db->conn, query);
+    
+    if (res) {
+        ExecStatusType status = PQresultStatus(res);
+        if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+            fprintf(stderr, "db_query error: %s\n", PQresultErrorMessage(res));
+        }
+    } else {
+        fprintf(stderr, "db_query: PQexec returned NULL: %s\n", PQerrorMessage(db->conn));
+    }
+    
+    return res;
 }
 
 int db_is_connected(DatabaseConnection *db) {

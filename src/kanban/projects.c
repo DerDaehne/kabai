@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../include/kanban/projects.h"
-#include "../include/db/connection.h"
+#include "kanban/projects.h"
+#include "db/connection.h"
 
 Project* project_create(
     DatabaseConnection *db,
