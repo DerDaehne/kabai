@@ -23,9 +23,6 @@ jobs:
       - name: Build
         run: nix build . --print-build-logs
 
-      - name: Test
-        run: echo 'No tests yet - see ticket #1'
-
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
