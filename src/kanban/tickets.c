@@ -81,12 +81,14 @@ Ticket *ticket_create(
     Ticket *t = malloc(sizeof(Ticket));
     if (!t) return NULL;
 
-    t->id          = id;
-    t->project_id  = project_id;
-    t->status_id   = status_id;
-    t->title       = strdup(title);
-    t->description = description ? strdup(description) : NULL;
-    t->assignee    = NULL;
+    t->id                     = id;
+    t->project_id             = project_id;
+    t->status_id              = status_id;
+    t->title                  = strdup(title);
+    t->description            = description ? strdup(description) : NULL;
+    t->assignee               = NULL;
+    t->status_name            = NULL;
+    t->agent_role_instruction = NULL;
     return t;
 }
 
@@ -97,9 +99,13 @@ Ticket *ticket_get_by_id(DatabaseConnection *db, int ticket_id) {
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
     const char *params[1] = {id_str};
 
+    /* JOIN board_statuses to fetch status_name and agent_role_instruction */
     PGresult *res = PQexecParams(db->conn,
-        "SELECT id, project_id, status_id, title, description, assignee"
-        " FROM tickets WHERE id = $1",
+        "SELECT t.id, t.project_id, t.status_id, t.title, t.description, t.assignee,"
+        "       bs.name, bs.agent_role_instruction"
+        " FROM tickets t"
+        " JOIN board_statuses bs ON bs.id = t.status_id"
+        " WHERE t.id = $1",
         1, NULL, params, NULL, NULL, 0);
 
     if (!res || PQntuples(res) == 0) {
@@ -120,6 +126,11 @@ Ticket *ticket_get_by_id(DatabaseConnection *db, int ticket_id) {
 
     const char *assignee = PQgetvalue(res, 0, 5);
     t->assignee = (assignee && *assignee) ? strdup(assignee) : NULL;
+
+    t->status_name = strdup(PQgetvalue(res, 0, 6));
+
+    const char *ari = PQgetvalue(res, 0, 7);
+    t->agent_role_instruction = (ari && *ari) ? strdup(ari) : NULL;
 
     PQclear(res);
     return t;
@@ -163,6 +174,9 @@ Ticket **ticket_list_by_project(DatabaseConnection *db, int project_id) {
 
         const char *assignee = PQgetvalue(res, i, 5);
         tickets[i]->assignee = (assignee && *assignee) ? strdup(assignee) : NULL;
+
+        tickets[i]->status_name            = NULL;
+        tickets[i]->agent_role_instruction = NULL;
     }
 
     tickets[count] = NULL;
@@ -366,6 +380,8 @@ void ticket_free(Ticket *t) {
     free(t->title);
     free(t->description);
     free(t->assignee);
+    free(t->status_name);
+    free(t->agent_role_instruction);
     free(t);
 }
 

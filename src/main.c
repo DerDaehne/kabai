@@ -16,6 +16,7 @@
 #include "kanban/projects.h"
 #include "kanban/tickets.h"
 #include "kanban/comments.h"
+#include "kanban/board_statuses.h"
 
 #define MCP_PROTOCOL_VERSION "2024-11-05"
 #define MCP_SERVER_VERSION   "0.2.0"
@@ -123,6 +124,109 @@ static cJSON *handle_initialize(cJSON *id, cJSON *params) {
     cJSON_AddItemToObject(result, "serverInfo", server_info);
 
     return jsonrpc_result(id, result);
+}
+
+
+/* ============================================================================
+ * MCP Tools: Board Statuses & Workflow
+ * ============================================================================ */
+
+static cJSON *tool_list_board_statuses(cJSON *id, cJSON *params) {
+    cJSON *proj_j = cJSON_GetObjectItemCaseSensitive(params, "project_id");
+    if (!cJSON_IsNumber(proj_j))
+        return mcp_tool_err(id, "Missing required parameter: project_id");
+
+    BoardStatus **statuses = board_status_list_by_project(global_db, (int)proj_j->valueint);
+    cJSON *arr = cJSON_CreateArray();
+    if (!statuses) return mcp_tool_ok(id, arr);
+
+    for (int i = 0; statuses[i]; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "id", statuses[i]->id);
+        cJSON_AddNumberToObject(o, "project_id", statuses[i]->project_id);
+        cJSON_AddStringToObject(o, "name", statuses[i]->name);
+        cJSON_AddStringToObject(o, "display_name", statuses[i]->display_name);
+        cJSON_AddNumberToObject(o, "position", statuses[i]->position);
+        if (statuses[i]->agent_role_instruction)
+            cJSON_AddStringToObject(o, "agent_role_instruction",
+                                    statuses[i]->agent_role_instruction);
+        cJSON_AddItemToArray(arr, o);
+    }
+    board_status_free_array(statuses);
+    return mcp_tool_ok(id, arr);
+}
+
+static cJSON *tool_create_board_status(cJSON *id, cJSON *params) {
+    cJSON *proj_j = cJSON_GetObjectItemCaseSensitive(params, "project_id");
+    cJSON *name_j = cJSON_GetObjectItemCaseSensitive(params, "name");
+    cJSON *disp_j = cJSON_GetObjectItemCaseSensitive(params, "display_name");
+    cJSON *pos_j  = cJSON_GetObjectItemCaseSensitive(params, "position");
+    cJSON *ari_j  = cJSON_GetObjectItemCaseSensitive(params, "agent_role_instruction");
+
+    if (!cJSON_IsNumber(proj_j) || !cJSON_IsString(name_j) ||
+        !cJSON_IsString(disp_j) || !cJSON_IsNumber(pos_j))
+        return mcp_tool_err(id,
+            "Missing required parameters: project_id, name, display_name, position");
+
+    BoardStatus *bs = board_status_create(
+        global_db,
+        (int)proj_j->valueint,
+        name_j->valuestring,
+        disp_j->valuestring,
+        (int)pos_j->valueint,
+        cJSON_IsString(ari_j) ? ari_j->valuestring : NULL
+    );
+    if (!bs) return mcp_tool_err(id, "Failed to create board status");
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddNumberToObject(r, "id", bs->id);
+    cJSON_AddNumberToObject(r, "project_id", bs->project_id);
+    cJSON_AddStringToObject(r, "name", bs->name);
+    cJSON_AddStringToObject(r, "display_name", bs->display_name);
+    cJSON_AddNumberToObject(r, "position", bs->position);
+    if (bs->agent_role_instruction)
+        cJSON_AddStringToObject(r, "agent_role_instruction", bs->agent_role_instruction);
+    board_status_free(bs);
+    return mcp_tool_ok(id, r);
+}
+
+static cJSON *tool_create_status_transition(cJSON *id, cJSON *params) {
+    cJSON *proj_j = cJSON_GetObjectItemCaseSensitive(params, "project_id");
+    cJSON *from_j = cJSON_GetObjectItemCaseSensitive(params, "from_status_id");
+    cJSON *to_j   = cJSON_GetObjectItemCaseSensitive(params, "to_status_id");
+
+    if (!cJSON_IsNumber(proj_j) || !cJSON_IsNumber(from_j) || !cJSON_IsNumber(to_j))
+        return mcp_tool_err(id,
+            "Missing required parameters: project_id, from_status_id, to_status_id");
+
+    if (!status_transition_create(global_db, (int)proj_j->valueint,
+                                  (int)from_j->valueint, (int)to_j->valueint))
+        return mcp_tool_err(id, "Failed to create status transition");
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "success", 1);
+    return mcp_tool_ok(id, r);
+}
+
+static cJSON *tool_list_status_transitions(cJSON *id, cJSON *params) {
+    cJSON *proj_j = cJSON_GetObjectItemCaseSensitive(params, "project_id");
+    if (!cJSON_IsNumber(proj_j))
+        return mcp_tool_err(id, "Missing required parameter: project_id");
+
+    StatusTransition **trans = status_transition_list_by_project(
+        global_db, (int)proj_j->valueint);
+
+    cJSON *arr = cJSON_CreateArray();
+    if (!trans) return mcp_tool_ok(id, arr);
+
+    for (int i = 0; trans[i]; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "from_status_id", trans[i]->from_status_id);
+        cJSON_AddNumberToObject(o, "to_status_id",   trans[i]->to_status_id);
+        cJSON_AddItemToArray(arr, o);
+    }
+    status_transition_free_array(trans);
+    return mcp_tool_ok(id, arr);
 }
 
 
@@ -285,6 +389,45 @@ static cJSON *handle_tools_list(cJSON *id) {
     cJSON_AddItemToArray(tools, make_tool("kb.ai_list_comments",
         "List all work log entries / comments for a ticket", make_schema(props, req)));
 
+    /* ---- Board Statuses & Workflow ---- */
+
+    props = cJSON_CreateObject();
+    cJSON_AddItemToObject(props, "project_id", prop_num("Numeric project ID"));
+    req[0] = "project_id"; req[1] = NULL;
+    cJSON_AddItemToArray(tools, make_tool("kb.ai_list_board_statuses",
+        "List all columns (board statuses) of a project including their "
+        "agent_role_instruction. Call this first to discover status IDs and "
+        "agent personas before creating tickets or setting up transitions.",
+        make_schema(props, req)));
+
+    props = cJSON_CreateObject();
+    cJSON_AddItemToObject(props, "project_id",            prop_num("Numeric project ID"));
+    cJSON_AddItemToObject(props, "name",                  prop_str("Machine name, e.g. 'in_progress'"));
+    cJSON_AddItemToObject(props, "display_name",          prop_str("Human-readable label, e.g. 'In Arbeit'"));
+    cJSON_AddItemToObject(props, "position",              prop_num("Column order (0-based)"));
+    cJSON_AddItemToObject(props, "agent_role_instruction",
+        prop_str("Dynamic persona prompt injected when an agent picks up a ticket in this column (optional)"));
+    req[0] = "project_id"; req[1] = "name"; req[2] = "display_name"; req[3] = "position"; req[4] = NULL;
+    cJSON_AddItemToArray(tools, make_tool("kb.ai_create_board_status",
+        "Create a new board column/status for a project", make_schema(props, req)));
+
+    props = cJSON_CreateObject();
+    cJSON_AddItemToObject(props, "project_id",    prop_num("Numeric project ID"));
+    cJSON_AddItemToObject(props, "from_status_id", prop_num("Source column ID"));
+    cJSON_AddItemToObject(props, "to_status_id",   prop_num("Target column ID"));
+    req[0] = "project_id"; req[1] = "from_status_id"; req[2] = "to_status_id"; req[3] = NULL;
+    cJSON_AddItemToArray(tools, make_tool("kb.ai_create_status_transition",
+        "Define an allowed workflow transition between two columns. "
+        "The database will reject moves not defined here.",
+        make_schema(props, req)));
+
+    props = cJSON_CreateObject();
+    cJSON_AddItemToObject(props, "project_id", prop_num("Numeric project ID"));
+    req[0] = "project_id"; req[1] = NULL;
+    cJSON_AddItemToArray(tools, make_tool("kb.ai_list_status_transitions",
+        "List all allowed workflow transitions for a project",
+        make_schema(props, req)));
+
     cJSON *result = cJSON_CreateObject();
     cJSON_AddItemToObject(result, "tools", tools);
     return jsonrpc_result(id, result);
@@ -423,9 +566,12 @@ static cJSON *tool_get_ticket(cJSON *id, cJSON *params) {
     cJSON_AddNumberToObject(r, "id", t->id);
     cJSON_AddNumberToObject(r, "project_id", t->project_id);
     cJSON_AddNumberToObject(r, "status_id", t->status_id);
+    if (t->status_name) cJSON_AddStringToObject(r, "status_name", t->status_name);
     cJSON_AddStringToObject(r, "title", t->title);
     if (t->description) cJSON_AddStringToObject(r, "description", t->description);
     if (t->assignee)    cJSON_AddStringToObject(r, "assignee", t->assignee);
+    if (t->agent_role_instruction)
+        cJSON_AddStringToObject(r, "agent_role_instruction", t->agent_role_instruction);
     ticket_free(t);
     return mcp_tool_ok(id, r);
 }
@@ -442,6 +588,11 @@ static cJSON *tool_get_ticket_detailed(cJSON *id, cJSON *params) {
     cJSON_AddNumberToObject(ticket_j, "id", d->ticket->id);
     cJSON_AddNumberToObject(ticket_j, "project_id", d->ticket->project_id);
     cJSON_AddNumberToObject(ticket_j, "status_id", d->ticket->status_id);
+    if (d->ticket->status_name)
+        cJSON_AddStringToObject(ticket_j, "status_name", d->ticket->status_name);
+    if (d->ticket->agent_role_instruction)
+        cJSON_AddStringToObject(ticket_j, "agent_role_instruction",
+                                d->ticket->agent_role_instruction);
     cJSON_AddStringToObject(ticket_j, "title", d->ticket->title);
     if (d->ticket->description)
         cJSON_AddStringToObject(ticket_j, "description", d->ticket->description);
@@ -646,8 +797,12 @@ static cJSON *dispatch_tool(cJSON *id, const char *name, cJSON *params) {
     if (strcmp(name, "kb.ai_update_ticket") == 0)       return tool_update_ticket(id, params);
     if (strcmp(name, "kb.ai_add_task") == 0)            return tool_add_task(id, params);
     if (strcmp(name, "kb.ai_complete_task") == 0)       return tool_complete_task(id, params);
-    if (strcmp(name, "kb.ai_add_comment") == 0)         return tool_add_comment(id, params);
-    if (strcmp(name, "kb.ai_list_comments") == 0)       return tool_list_comments(id, params);
+    if (strcmp(name, "kb.ai_add_comment") == 0)              return tool_add_comment(id, params);
+    if (strcmp(name, "kb.ai_list_comments") == 0)            return tool_list_comments(id, params);
+    if (strcmp(name, "kb.ai_list_board_statuses") == 0)      return tool_list_board_statuses(id, params);
+    if (strcmp(name, "kb.ai_create_board_status") == 0)      return tool_create_board_status(id, params);
+    if (strcmp(name, "kb.ai_create_status_transition") == 0) return tool_create_status_transition(id, params);
+    if (strcmp(name, "kb.ai_list_status_transitions") == 0)  return tool_list_status_transitions(id, params);
     return mcp_tool_err(id, "Unknown tool");
 }
 

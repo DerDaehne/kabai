@@ -39,6 +39,7 @@
               src/kanban/projects.c \
               src/kanban/tickets.c \
               src/kanban/comments.c \
+              src/kanban/board_statuses.c \
               -L${pkgs.postgresql.lib}/lib \
               -L${pkgs.cjson}/lib \
               -lpq -lcjson -lm
