@@ -1,34 +1,56 @@
-name: Build
+name: CI
+
 on:
   push:
-    branches: [master]
-    tags: [v*]
+    branches: [main]
+    tags: ["v*"]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
   build:
     runs-on: ci
     steps:
-      - name: checkout
-        uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: install nix
-        uses: https://github.com/determinateSystems/nix-installer-action@v12
+      - name: Install Nix
+        uses: https://github.com/DeterminateSystems/nix-installer-action@v14
 
-      - name: nix build
+      - name: Enable Nix cache (magic-nix-cache)
+        uses: https://github.com/DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Build
         run: nix build . --print-build-logs
 
-      - name: upload artifacts
-        uses: actions/upload-artifact@v3
+      - name: Test
+        run: echo "No tests yet — see ticket #1"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
           name: kbai
           path: ./result/bin/kbai
-          archive: false
-          retention-days: 5
+          retention-days: 7
 
-      - name: publish release
-        if: startsWith(github.ref, 'refs/tags/')
+  release:
+    runs-on: ci
+    needs: build
+    if: startsWith(gitea.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: https://github.com/DeterminateSystems/nix-installer-action@v14
+
+      - name: Enable Nix cache (magic-nix-cache)
+        uses: https://github.com/DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Build release binary
+        run: nix build . --print-build-logs
+
+      - name: Publish release
         uses: actions/forgejo-release@v2.5.0
         with:
           direction: upload

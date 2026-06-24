@@ -1,5 +1,7 @@
 # kb.ai - MCP Server
 
+[![CI](https://codeberg.org/danszek/kb.ai/actions/workflows/build.yml/badge.svg)](https://codeberg.org/danszek/kb.ai/actions)
+
 > **Database-Driven Kanban/Project Board Engine for Agentic AI Workflows**
 
 `kb.ai` ist ein **MCP-Server** in C, der Kanban-Operationen als MCP-Tools für Agentic AI Workflows bereitstellt. Das System nutzt **PostgreSQL** (libpq) als Backend und wird über **Nix Flakes** gebaut.
