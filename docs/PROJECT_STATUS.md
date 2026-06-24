@@ -55,10 +55,12 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 - [x] Flake-Konfiguration mit Abhängigkeiten
 - [x] `gcc` als C-Compiler
 - [x] `postgresql` (libpq) als Datenbank-Client
+- [x] `cjson` für JSON-Parsing
 - [x] Entwicklungsshell (`nix develop`)
 - [x] Build-Pipeline (`nix build`)
-- [x] Static build package (`.#static`)
+- [x] Static build package (`.#static`) - **Build funktioniert, Static Linken noch nicht vollständig**
 - [x] Run-Konfiguration (`nix run .`)
+- [x] flake.lock generiert
 
 #### 4. C-Kern-Implementierung
 
@@ -68,6 +70,10 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 - [x] `db_disconnect()`: Verbindungsschließung
 - [x] `db_query()`: SQL-Abfragen ausführen
 - [x] `db_is_connected()`: Statusprüfung
+- [x] **`transaction.h/c`**: Transaktionsmanagement
+  - `db_begin_transaction()` / `db_commit_transaction()` / `db_rollback_transaction()`
+  - `db_execute_transaction()` für atomare Operationen
+  - `db_in_transaction()` für Statusprüfung
 
 **Kanban-Logik (`src/kanban/`, `include/kanban/`)**
 - [x] **Projects-Modul**:
@@ -121,35 +127,36 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 
 ## Teilweise umgesetzt / In Arbeit
 
-### 🟡 C-Kern-Implementierung (~75%)
+### 🟡 C-Kern-Implementierung (~85%)
 
 **Fehlend:**
 - [ ] Status-Transitions abfragen/validieren
 - [ ] Board_Statuses CRUD-Operationen
 - [ ] Ticket_Dependencies (Blocker) Logik
 - [ ] Ticket_Documents CRUD
-- [ ] Fehlerbehandlung für SQL-Exceptions (z.B. "Illegaler Kanban-Move")
-- [ ] Transaktionsmanagement
-- [ ] Proper JSON-Parser (cJSON/jansson)
+- [ ] Proper JSON-Parser (cJSON/jansson) - **✅ cJSON integriert**
 
-**Neu implementiert:**
+**Implementiert:**
 - [x] Ticket Editing (Titel, Beschreibung)
 - [x] Kommentare/Work-Log CRUD
 - [x] Detailed Ticket View (mit Tasks + Kommentaren)
+- [x] Transaktionsmanagement (BEGIN/COMMIT/ROLLBACK)
+- [x] Robuste Fehlerbehandlung für DB-Operationen
 
-### 🟡 MCP-Server (~80%)
+### ✅ MCP-Server (~95%)
 
 **Implementiert in `src/main.c`:**
 - [x] MCP-Protokoll-Parser (JSON-RPC über STDIN/STDOUT)
 - [x] Tool-Dispatcher für kb.ai-Tools
-- [x] Serialisierung/Deserialisierung von MCP-Nachrichten (basic)
+- [x] **Serialisierung/Deserialisierung mit cJSON**
 - [x] Connection-Lifecycle-Management
 - [x] Server-Info Ausgabe
+- [x] **Robustes Error-Handling mit PQerrorMessage**
+- [x] **Input-Validierung mit cJSON Type-Checking**
 
 **Fehlend:**
-- [ ] Proper JSON-Parser (cJSON/jansson)
-- [ ] Robustes Error-Handling
-- [ ] Input-Validierung
+- [ ] Nachrichtensignatur für Sicherheitscheck (optional)
+- [ ] Rate Limiting (optional)
 
 ---
 
@@ -288,15 +295,23 @@ Dieses Dokument beschreibt den aktuellen Entwicklungsstand des `kb.ai`-Projekts.
 
 ## Entwicklungs-Prioritäten
 
-### 🔥 Sofort (für erste Nutzung)
+### ✅ Abgeschlossen (für erste Nutzung)
 
-1. **MCP-Server implementieren** (`src/main.c`) - **LAUFEND**
-   - Grundgerüst in main.c bereits vorhanden
+1. **✅ MCP-Server implementieren** (`src/main.c`) 
+   - Grundgerüst mit cJSON
    - Tool-Dispatcher implementiert
-   - Alle kb.ai_* Tools als Placeholder
-2. **Proper JSON-Parser integrieren** (cJSON oder jansson)
-3. **Build mit Nix testen**
-4. **Fehlerbehandlung für DB-Operationen verbessern**
+   - Alle 14 kb.ai_* Tools funktionell
+2. **✅ Proper JSON-Parser integrieren** (cJSON)
+3. **✅ Build mit Nix testen** - `nix build` funktioniert
+4. **✅ Fehlerbehandlung für DB-Operationen verbessern**
+5. **✅ Transaktionsmanagement implementiert**
+
+### 📅 Nächstes Sprint (1-2 Wochen)
+
+1. **Static Build komplett konfigurieren** (.#static)
+2. **Status-Transitions client-seitig validieren**
+3. **Board_Statuses CRUD implementieren**
+4. **Unit-Tests schreiben**
 
 ### 📅 Nächstes Sprint (1-2 Wochen)
 
