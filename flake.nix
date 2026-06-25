@@ -9,11 +9,7 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs    = import nixpkgs { inherit system; };
-        pkgsWin = import nixpkgs {
-          inherit system;
-          crossSystem = nixpkgs.lib.systems.examples.mingwW64;
-        };
+        pkgs = import nixpkgs { inherit system; };
       in
       {
         packages.default = pkgs.stdenv.mkDerivation {
@@ -47,46 +43,6 @@
           '';
         };
 
-        packages.windows = pkgsWin.stdenv.mkDerivation {
-          name = "kbai-windows";
-          version = "0.3.0";
-          src = ./.;
-
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = with pkgsWin; [
-            postgresql
-            cjson
-            openssl
-            windows.pthreads
-          ];
-
-          buildPhase = ''
-            ${pkgsWin.stdenv.cc.targetPrefix}cc -o kbai.exe \
-              -I./src \
-              -I${pkgsWin.postgresql.dev}/include \
-              -I${pkgsWin.cjson}/include \
-              -I${pkgsWin.openssl.dev}/include \
-              src/main.c \
-              src/db/connection.c \
-              src/db/transaction.c \
-              src/kanban/projects.c \
-              src/kanban/tickets.c \
-              src/kanban/comments.c \
-              src/kanban/board_statuses.c \
-              -L${pkgsWin.postgresql.lib}/lib \
-              -L${pkgsWin.cjson}/lib \
-              -L${pkgsWin.openssl.out}/lib \
-              -lpq -lssl -lcrypto -lcjson \
-              -lws2_32 -lgdi32 -lcrypt32 -lsecur32 \
-              -static -static-libgcc
-          '';
-
-          installPhase = ''
-            mkdir -p $out/bin
-            cp kbai.exe $out/bin/
-          '';
-        };
-
         apps.default = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/kbai";
@@ -106,9 +62,8 @@
             echo "======================================"
             echo ""
             echo "Build commands:"
-            echo "  nix build           - Build binary (Linux)"
-            echo "  nix build .#windows - Build binary (Windows cross-compile)"
-            echo "  nix run .           - Run MCP server"
+            echo "  nix build   - Build binary (Linux)"
+            echo "  nix run .   - Run MCP server"
             echo ""
             echo "Environment variables for DB connection:"
             echo "  KB_AI_DB_HOST      (default: localhost)"
