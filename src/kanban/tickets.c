@@ -87,6 +87,7 @@ Ticket *ticket_create(
     t->title                  = strdup(title);
     t->description            = description ? strdup(description) : NULL;
     t->assignee               = NULL;
+    t->model                  = NULL;
     t->status_name            = NULL;
     t->agent_role_instruction = NULL;
     return t;
@@ -101,7 +102,7 @@ Ticket *ticket_get_by_id(DatabaseConnection *db, int ticket_id) {
 
     /* JOIN board_statuses to fetch status_name and agent_role_instruction */
     PGresult *res = PQexecParams(db->conn,
-        "SELECT t.id, t.project_id, t.status_id, t.title, t.description, t.assignee,"
+        "SELECT t.id, t.project_id, t.status_id, t.title, t.description, t.assignee, t.model,"
         "       bs.name, bs.agent_role_instruction"
         " FROM tickets t"
         " JOIN board_statuses bs ON bs.id = t.status_id"
@@ -127,9 +128,12 @@ Ticket *ticket_get_by_id(DatabaseConnection *db, int ticket_id) {
     const char *assignee = PQgetvalue(res, 0, 5);
     t->assignee = (assignee && *assignee) ? strdup(assignee) : NULL;
 
-    t->status_name = strdup(PQgetvalue(res, 0, 6));
+    const char *model = PQgetvalue(res, 0, 6);
+    t->model = (model && *model) ? strdup(model) : NULL;
 
-    const char *ari = PQgetvalue(res, 0, 7);
+    t->status_name = strdup(PQgetvalue(res, 0, 7));
+
+    const char *ari = PQgetvalue(res, 0, 8);
     t->agent_role_instruction = (ari && *ari) ? strdup(ari) : NULL;
 
     PQclear(res);
@@ -175,6 +179,7 @@ Ticket **ticket_list_by_project(DatabaseConnection *db, int project_id) {
         const char *assignee = PQgetvalue(res, i, 5);
         tickets[i]->assignee = (assignee && *assignee) ? strdup(assignee) : NULL;
 
+        tickets[i]->model                  = NULL;
         tickets[i]->status_name            = NULL;
         tickets[i]->agent_role_instruction = NULL;
     }
@@ -210,16 +215,24 @@ int ticket_update_status(DatabaseConnection *db, int ticket_id, int new_status_i
     return affected > 0;
 }
 
-int ticket_assign(DatabaseConnection *db, int ticket_id, const char *assignee) {
+int ticket_assign(DatabaseConnection *db, int ticket_id, const char *assignee, const char *model) {
     if (!db || !assignee) return 0;
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
-    const char *params[2] = {assignee, id_str};
 
-    PGresult *res = PQexecParams(db->conn,
-        "UPDATE tickets SET assignee = $1, updated_at = NOW() WHERE id = $2",
-        2, NULL, params, NULL, NULL, 0);
+    PGresult *res;
+    if (model) {
+        const char *params[3] = {assignee, model, id_str};
+        res = PQexecParams(db->conn,
+            "UPDATE tickets SET assignee = $1, model = $2, updated_at = NOW() WHERE id = $3",
+            3, NULL, params, NULL, NULL, 0);
+    } else {
+        const char *params[2] = {assignee, id_str};
+        res = PQexecParams(db->conn,
+            "UPDATE tickets SET assignee = $1, updated_at = NOW() WHERE id = $2",
+            2, NULL, params, NULL, NULL, 0);
+    }
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
         if (res) PQclear(res);
@@ -380,6 +393,7 @@ void ticket_free(Ticket *t) {
     free(t->title);
     free(t->description);
     free(t->assignee);
+    free(t->model);
     free(t->status_name);
     free(t->agent_role_instruction);
     free(t);

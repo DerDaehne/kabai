@@ -28,7 +28,9 @@
 #define DEFAULT_DB_USER     "postgres"
 #define DEFAULT_DB_PASSWORD ""
 
-static DatabaseConnection *global_db = NULL;
+static DatabaseConnection *global_db    = NULL;
+static const char         *g_agent_name = NULL;
+static const char         *g_agent_model = NULL;
 
 
 /* ============================================================================
@@ -117,6 +119,8 @@ static cJSON *handle_initialize(cJSON *id, cJSON *params) {
     cJSON *server_info = cJSON_CreateObject();
     cJSON_AddStringToObject(server_info, "name", MCP_SERVER_NAME);
     cJSON_AddStringToObject(server_info, "version", MCP_SERVER_VERSION);
+    if (g_agent_name)  cJSON_AddStringToObject(server_info, "agentName",  g_agent_name);
+    if (g_agent_model) cJSON_AddStringToObject(server_info, "agentModel", g_agent_model);
 
     cJSON *result = cJSON_CreateObject();
     cJSON_AddStringToObject(result, "protocolVersion", MCP_PROTOCOL_VERSION);
@@ -341,10 +345,12 @@ static cJSON *handle_tools_list(cJSON *id) {
     props = cJSON_CreateObject();
     cJSON_AddItemToObject(props, "ticket_id", prop_num("Numeric ticket ID"));
     cJSON_AddItemToObject(props, "assignee",  prop_str(
-        "Agent or user identifier (e.g. 'claude-sonnet-4-6', 'johndoe')"));
-    req[0] = "ticket_id"; req[1] = "assignee"; req[2] = NULL;
+        "Agent or user identifier. If omitted, falls back to KB_AI_AGENT_NAME env var."));
+    req[0] = "ticket_id"; req[1] = NULL;
     cJSON_AddItemToArray(tools, make_tool("kb.ai_assign_ticket",
-        "Assign a ticket to an agent or user", make_schema(props, req)));
+        "Assign a ticket to an agent or user. Uses KB_AI_AGENT_NAME as default assignee "
+        "and always writes KB_AI_AGENT_MODEL to the model field.",
+        make_schema(props, req)));
 
     props = cJSON_CreateObject();
     cJSON_AddItemToObject(props, "ticket_id",   prop_num("Numeric ticket ID"));
@@ -570,6 +576,7 @@ static cJSON *tool_get_ticket(cJSON *id, cJSON *params) {
     cJSON_AddStringToObject(r, "title", t->title);
     if (t->description) cJSON_AddStringToObject(r, "description", t->description);
     if (t->assignee)    cJSON_AddStringToObject(r, "assignee", t->assignee);
+    if (t->model)       cJSON_AddStringToObject(r, "model", t->model);
     if (t->agent_role_instruction)
         cJSON_AddStringToObject(r, "agent_role_instruction", t->agent_role_instruction);
     ticket_free(t);
@@ -598,6 +605,8 @@ static cJSON *tool_get_ticket_detailed(cJSON *id, cJSON *params) {
         cJSON_AddStringToObject(ticket_j, "description", d->ticket->description);
     if (d->ticket->assignee)
         cJSON_AddStringToObject(ticket_j, "assignee", d->ticket->assignee);
+    if (d->ticket->model)
+        cJSON_AddStringToObject(ticket_j, "model", d->ticket->model);
 
     cJSON *tasks_arr = cJSON_CreateArray();
     if (d->tasks) {
@@ -656,10 +665,15 @@ static cJSON *tool_assign_ticket(cJSON *id, cJSON *params) {
     cJSON *tid_j = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
     cJSON *ass_j = cJSON_GetObjectItemCaseSensitive(params, "assignee");
 
-    if (!cJSON_IsNumber(tid_j) || !cJSON_IsString(ass_j))
-        return mcp_tool_err(id, "Missing required parameters: ticket_id, assignee");
+    if (!cJSON_IsNumber(tid_j))
+        return mcp_tool_err(id, "Missing required parameter: ticket_id");
 
-    if (!ticket_assign(global_db, (int)tid_j->valueint, ass_j->valuestring))
+    /* Use provided assignee, fall back to KB_AI_AGENT_NAME, then error */
+    const char *assignee = cJSON_IsString(ass_j) ? ass_j->valuestring : g_agent_name;
+    if (!assignee)
+        return mcp_tool_err(id, "Missing assignee: provide 'assignee' parameter or set KB_AI_AGENT_NAME");
+
+    if (!ticket_assign(global_db, (int)tid_j->valueint, assignee, g_agent_model))
         return mcp_tool_err(id, "Failed to assign ticket");
 
     cJSON *r = cJSON_CreateObject();
@@ -889,6 +903,9 @@ static int db_init(void) {
     const char *dbname   = getenv("KB_AI_DB_NAME");
     const char *user     = getenv("KB_AI_DB_USER");
     const char *password = getenv("KB_AI_DB_PASSWORD");
+
+    g_agent_name  = getenv("KB_AI_AGENT_NAME");
+    g_agent_model = getenv("KB_AI_AGENT_MODEL");
 
     global_db = db_connect(
         host     ? host     : DEFAULT_DB_HOST,

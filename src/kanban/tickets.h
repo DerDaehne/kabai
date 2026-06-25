@@ -14,6 +14,7 @@ typedef struct {
     char *title;
     char *description;
     char *assignee;
+    char *model;
     /* Populated by ticket_get_by_id (via JOIN); NULL in list results */
     char *status_name;
     char *agent_role_instruction;
@@ -87,7 +88,7 @@ int ticket_update_status(DatabaseConnection *db, int ticket_id, int new_status_i
  * @param assignee Agent identifier
  * @return 1 on success, 0 on failure
  */
-int ticket_assign(DatabaseConnection *db, int ticket_id, const char *assignee);
+int ticket_assign(DatabaseConnection *db, int ticket_id, const char *assignee, const char *model);
 
 /**
  * @brief Update ticket title
