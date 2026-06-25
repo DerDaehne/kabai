@@ -20,14 +20,24 @@ jobs:
       - name: Enable Nix cache (magic-nix-cache)
         uses: https://github.com/DeterminateSystems/magic-nix-cache-action@v8
 
-      - name: Build
-        run: nix build . --print-build-logs
+      - name: Build (Linux)
+        run: nix build . -o result-linux --print-build-logs
 
-      - name: Upload build artifact
+      - name: Build (Windows cross-compile)
+        run: nix build .#windows -o result-windows --print-build-logs
+
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v3
         with:
-          name: kbai
-          path: ./result/bin/kbai
+          name: kbai-linux
+          path: ./result-linux/bin/kbai
+          retention-days: 7
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: kbai-windows
+          path: ./result-windows/bin/kbai.exe
           retention-days: 7
 
   release:
@@ -44,14 +54,23 @@ jobs:
       - name: Enable Nix cache (magic-nix-cache)
         uses: https://github.com/DeterminateSystems/magic-nix-cache-action@v8
 
-      - name: Build release binary
-        run: nix build . --print-build-logs
+      - name: Build Linux binary
+        run: nix build . -o result-linux --print-build-logs
+
+      - name: Build Windows binary
+        run: nix build .#windows -o result-windows --print-build-logs
+
+      - name: Collect release artifacts
+        run: |
+          mkdir -p release-dir
+          cp result-linux/bin/kbai release-dir/kbai-linux-x86_64
+          cp result-windows/bin/kbai.exe release-dir/kbai-windows-x86_64.exe
 
       - name: Publish release
         uses: actions/forgejo-release@v2.5.0
         with:
           direction: upload
           token: ${{ secrets.GITHUB_TOKEN }}
-          release-dir: ./result/bin/
+          release-dir: ./release-dir/
           release-notes-assistant: true
           override: true

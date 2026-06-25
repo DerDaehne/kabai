@@ -9,37 +9,37 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs       = import nixpkgs { inherit system; };
+        pkgsWin    = import nixpkgs {
+          inherit system;
+          crossSystem = nixpkgs.lib.systems.examples.mingwW64;
+        };
+
+        srcFiles = ''
+          src/main.c \
+          src/db/connection.c \
+          src/db/transaction.c \
+          src/kanban/projects.c \
+          src/kanban/tickets.c \
+          src/kanban/comments.c \
+          src/kanban/board_statuses.c
+        '';
       in
       {
         packages.default = pkgs.stdenv.mkDerivation {
           name = "kbai";
-          version = "0.1.0";
+          version = "0.3.0";
           src = ./.;
 
-          nativeBuildInputs = with pkgs; [
-            gcc
-            pkg-config
-          ];
-
-          buildInputs = with pkgs; [
-            postgresql
-            cjson
-          ];
+          nativeBuildInputs = with pkgs; [ gcc pkg-config ];
+          buildInputs      = with pkgs; [ postgresql cjson ];
 
           buildPhase = ''
-            # Build with all includes and libraries
             gcc -o kbai \
               -I./src \
               -I${pkgs.postgresql.dev}/include \
               -I${pkgs.cjson}/include \
-              src/main.c \
-              src/db/connection.c \
-              src/db/transaction.c \
-              src/kanban/projects.c \
-              src/kanban/tickets.c \
-              src/kanban/comments.c \
-              src/kanban/board_statuses.c \
+              ${srcFiles} \
               -L${pkgs.postgresql.lib}/lib \
               -L${pkgs.cjson}/lib \
               -lpq -lcjson -lm
@@ -48,6 +48,40 @@
           installPhase = ''
             mkdir -p $out/bin
             cp kbai $out/bin/
+          '';
+        };
+
+        packages.windows = pkgsWin.stdenv.mkDerivation {
+          name = "kbai-windows";
+          version = "0.3.0";
+          src = ./.;
+
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = with pkgsWin; [
+            postgresql
+            cjson
+            openssl
+            windows.pthreads
+          ];
+
+          buildPhase = ''
+            ${pkgsWin.stdenv.cc.targetPrefix}cc -o kbai.exe \
+              -I./src \
+              -I${pkgsWin.postgresql.dev}/include \
+              -I${pkgsWin.cjson}/include \
+              -I${pkgsWin.openssl.dev}/include \
+              ${srcFiles} \
+              -L${pkgsWin.postgresql.lib}/lib \
+              -L${pkgsWin.cjson}/lib \
+              -L${pkgsWin.openssl.out}/lib \
+              -lpq -lssl -lcrypto -lcjson \
+              -lws2_32 -lgdi32 -lcrypt32 -lsecur32 \
+              -static -static-libgcc
+          '';
+
+          installPhase = ''
+            mkdir -p $out/bin
+            cp kbai.exe $out/bin/
           '';
         };
 
