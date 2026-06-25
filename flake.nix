@@ -9,21 +9,11 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs       = import nixpkgs { inherit system; };
-        pkgsWin    = import nixpkgs {
+        pkgs    = import nixpkgs { inherit system; };
+        pkgsWin = import nixpkgs {
           inherit system;
           crossSystem = nixpkgs.lib.systems.examples.mingwW64;
         };
-
-        srcFiles = ''
-          src/main.c \
-          src/db/connection.c \
-          src/db/transaction.c \
-          src/kanban/projects.c \
-          src/kanban/tickets.c \
-          src/kanban/comments.c \
-          src/kanban/board_statuses.c
-        '';
       in
       {
         packages.default = pkgs.stdenv.mkDerivation {
@@ -32,14 +22,20 @@
           src = ./.;
 
           nativeBuildInputs = with pkgs; [ gcc pkg-config ];
-          buildInputs      = with pkgs; [ postgresql cjson ];
+          buildInputs       = with pkgs; [ postgresql cjson ];
 
           buildPhase = ''
             gcc -o kbai \
               -I./src \
               -I${pkgs.postgresql.dev}/include \
               -I${pkgs.cjson}/include \
-              ${srcFiles} \
+              src/main.c \
+              src/db/connection.c \
+              src/db/transaction.c \
+              src/kanban/projects.c \
+              src/kanban/tickets.c \
+              src/kanban/comments.c \
+              src/kanban/board_statuses.c \
               -L${pkgs.postgresql.lib}/lib \
               -L${pkgs.cjson}/lib \
               -lpq -lcjson -lm
@@ -70,7 +66,13 @@
               -I${pkgsWin.postgresql.dev}/include \
               -I${pkgsWin.cjson}/include \
               -I${pkgsWin.openssl.dev}/include \
-              ${srcFiles} \
+              src/main.c \
+              src/db/connection.c \
+              src/db/transaction.c \
+              src/kanban/projects.c \
+              src/kanban/tickets.c \
+              src/kanban/comments.c \
+              src/kanban/board_statuses.c \
               -L${pkgsWin.postgresql.lib}/lib \
               -L${pkgsWin.cjson}/lib \
               -L${pkgsWin.openssl.out}/lib \
@@ -104,7 +106,8 @@
             echo "======================================"
             echo ""
             echo "Build commands:"
-            echo "  nix build           - Build binary"
+            echo "  nix build           - Build binary (Linux)"
+            echo "  nix build .#windows - Build binary (Windows cross-compile)"
             echo "  nix run .           - Run MCP server"
             echo ""
             echo "Environment variables for DB connection:"
@@ -113,6 +116,10 @@
             echo "  KB_AI_DB_NAME      (default: kb_ai)"
             echo "  KB_AI_DB_USER      (default: postgres)"
             echo "  KB_AI_DB_PASSWORD  (default: )"
+            echo ""
+            echo "Agent identity:"
+            echo "  KB_AI_AGENT_NAME   (default: none)"
+            echo "  KB_AI_AGENT_MODEL  (default: none)"
             echo ""
             export CFLAGS="-I./src -I${pkgs.postgresql.dev}/include -I${pkgs.cjson}/include"
             export LDFLAGS="-L${pkgs.postgresql.lib}/lib -L${pkgs.cjson.lib}/lib -lpq -lcjson"
