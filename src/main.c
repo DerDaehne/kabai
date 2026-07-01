@@ -19,7 +19,7 @@
 #include "kanban/board_statuses.h"
 
 #define MCP_PROTOCOL_VERSION "2024-11-05"
-#define MCP_SERVER_VERSION   "0.4.0"
+#define MCP_SERVER_VERSION   "0.5.0"
 #define MCP_SERVER_NAME      "kb.ai"
 
 #define DEFAULT_DB_HOST     "localhost"
@@ -154,6 +154,8 @@ static cJSON *tool_list_board_statuses(cJSON *id, cJSON *params) {
         if (statuses[i]->agent_role_instruction)
             cJSON_AddStringToObject(o, "agent_role_instruction",
                                     statuses[i]->agent_role_instruction);
+        if (statuses[i]->special_type)
+            cJSON_AddStringToObject(o, "special_type", statuses[i]->special_type);
         cJSON_AddItemToArray(arr, o);
     }
     board_status_free_array(statuses);
@@ -178,7 +180,8 @@ static cJSON *tool_create_board_status(cJSON *id, cJSON *params) {
         name_j->valuestring,
         disp_j->valuestring,
         (int)pos_j->valueint,
-        cJSON_IsString(ari_j) ? ari_j->valuestring : NULL
+        cJSON_IsString(ari_j) ? ari_j->valuestring : NULL,
+        NULL  /* special_type not exposed via MCP — managed internally */
     );
     if (!bs) return mcp_tool_err(id, "Failed to create board status");
 
@@ -308,13 +311,17 @@ static cJSON *handle_tools_list(cJSON *id) {
     cJSON_AddItemToObject(props, "status_id",   prop_num("ID of the initial board column/status"));
     cJSON_AddItemToObject(props, "title",        prop_str("Ticket title"));
     cJSON_AddItemToObject(props, "description",  prop_str("Optional detailed description"));
+    cJSON_AddItemToObject(props, "type",         prop_str("'ticket' (default) or 'epic'"));
     req[0] = "project_id"; req[1] = "status_id"; req[2] = "title"; req[3] = NULL;
     cJSON_AddItemToArray(tools, make_tool("kb.ai_create_ticket",
-        "Create a new ticket in a project", make_schema(props, req)));
+        "Create a new ticket or epic in a project. "
+        "Use type='epic' for high-level goals that group child tickets via link_tickets(parent_of).",
+        make_schema(props, req)));
 
     props = cJSON_CreateObject();
     cJSON_AddItemToObject(props, "project_id", prop_num("ID of the project to list tickets from"));
     cJSON_AddItemToObject(props, "status_id",  prop_num("Filter by status column (optional)"));
+    cJSON_AddItemToObject(props, "type",       prop_str("Filter by type: 'ticket' or 'epic' (optional)"));
     cJSON_AddItemToObject(props, "limit",      prop_num("Max tickets to return (optional, default unlimited)"));
     cJSON_AddItemToObject(props, "offset",     prop_num("Tickets to skip for pagination (optional, default 0)"));
     {
@@ -417,6 +424,31 @@ static cJSON *handle_tools_list(cJSON *id) {
     cJSON_AddItemToArray(tools, make_tool("kb.ai_delete_ticket",
         "Permanently delete a ticket (cascades tasks, comments, documents). "
         "Requires a non-empty reason. Use merge_into comment on the surviving ticket before deleting duplicates.",
+        make_schema(props, req)));
+
+    /* ---- Relations ---- */
+
+    props = cJSON_CreateObject();
+    cJSON_AddItemToObject(props, "from_ticket_id", prop_num("Source ticket ID"));
+    cJSON_AddItemToObject(props, "to_ticket_id",   prop_num("Target ticket ID"));
+    cJSON_AddItemToObject(props, "relation_type",  prop_str(
+        "One of: parent_of (epic→child), blocks (from blocks to), "
+        "duplicate_of (from is duplicate of to), relates_to (generic)"));
+    req[0] = "from_ticket_id"; req[1] = "to_ticket_id"; req[2] = "relation_type"; req[3] = NULL;
+    cJSON_AddItemToArray(tools, make_tool("kb.ai_link_tickets",
+        "Create a directed relation between two tickets. "
+        "Use parent_of to link an epic to its child tickets. "
+        "Relations are visible in get_ticket_detailed as the 'relations' array.",
+        make_schema(props, req)));
+
+    props = cJSON_CreateObject();
+    cJSON_AddItemToObject(props, "from_ticket_id", prop_num("Source ticket ID"));
+    cJSON_AddItemToObject(props, "to_ticket_id",   prop_num("Target ticket ID"));
+    cJSON_AddItemToObject(props, "relation_type",  prop_str(
+        "The relation to remove (must match exactly what was created)"));
+    req[0] = "from_ticket_id"; req[1] = "to_ticket_id"; req[2] = "relation_type"; req[3] = NULL;
+    cJSON_AddItemToArray(tools, make_tool("kb.ai_unlink_tickets",
+        "Remove a directed relation between two tickets",
         make_schema(props, req)));
 
     /* ---- Tasks ---- */
@@ -569,19 +601,26 @@ static cJSON *tool_create_ticket(cJSON *id, cJSON *params) {
     cJSON *stat_j  = cJSON_GetObjectItemCaseSensitive(params, "status_id");
     cJSON *title_j = cJSON_GetObjectItemCaseSensitive(params, "title");
     cJSON *desc_j  = cJSON_GetObjectItemCaseSensitive(params, "description");
+    cJSON *type_j  = cJSON_GetObjectItemCaseSensitive(params, "type");
 
     if (!cJSON_IsNumber(proj_j) || !cJSON_IsNumber(stat_j) || !cJSON_IsString(title_j))
         return mcp_tool_err(id, "Missing required parameters: project_id, status_id, title");
 
+    const char *type_val = cJSON_IsString(type_j) ? type_j->valuestring : NULL;
+    if (type_val && strcmp(type_val, "ticket") != 0 && strcmp(type_val, "epic") != 0)
+        return mcp_tool_err(id, "Invalid type: must be 'ticket' or 'epic'");
+
     Ticket *t = ticket_create(global_db, (int)proj_j->valueint, (int)stat_j->valueint,
                               title_j->valuestring,
-                              cJSON_IsString(desc_j) ? desc_j->valuestring : NULL);
+                              cJSON_IsString(desc_j) ? desc_j->valuestring : NULL,
+                              type_val);
     if (!t) return mcp_tool_err(id, "Failed to create ticket");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddNumberToObject(r, "id", t->id);
     cJSON_AddNumberToObject(r, "project_id", t->project_id);
     cJSON_AddNumberToObject(r, "status_id", t->status_id);
+    cJSON_AddStringToObject(r, "type", t->type ? t->type : "ticket");
     cJSON_AddStringToObject(r, "title", t->title);
     if (t->description) cJSON_AddStringToObject(r, "description", t->description);
     if (t->assignee)    cJSON_AddStringToObject(r, "assignee", t->assignee);
@@ -592,6 +631,7 @@ static cJSON *tool_create_ticket(cJSON *id, cJSON *params) {
 static cJSON *tool_list_tickets(cJSON *id, cJSON *params) {
     cJSON *proj_j    = cJSON_GetObjectItemCaseSensitive(params, "project_id");
     cJSON *status_j  = cJSON_GetObjectItemCaseSensitive(params, "status_id");
+    cJSON *type_j    = cJSON_GetObjectItemCaseSensitive(params, "type");
     cJSON *limit_j   = cJSON_GetObjectItemCaseSensitive(params, "limit");
     cJSON *offset_j  = cJSON_GetObjectItemCaseSensitive(params, "offset");
     cJSON *summary_j = cJSON_GetObjectItemCaseSensitive(params, "summary");
@@ -603,12 +643,13 @@ static cJSON *tool_list_tickets(cJSON *id, cJSON *params) {
     if (project_id <= 0)
         return mcp_tool_err(id, "Invalid project_id: must be a positive integer");
 
-    int status_id = cJSON_IsNumber(status_j) ? (int)status_j->valueint : 0;
-    int limit     = cJSON_IsNumber(limit_j)  ? (int)limit_j->valueint  : 0;
-    int offset    = cJSON_IsNumber(offset_j) ? (int)offset_j->valueint : 0;
-    int summary   = cJSON_IsTrue(summary_j);
+    int         status_id   = cJSON_IsNumber(status_j) ? (int)status_j->valueint : 0;
+    const char *type_filter = cJSON_IsString(type_j)   ? type_j->valuestring     : NULL;
+    int         limit       = cJSON_IsNumber(limit_j)  ? (int)limit_j->valueint  : 0;
+    int         offset      = cJSON_IsNumber(offset_j) ? (int)offset_j->valueint : 0;
+    int         summary     = cJSON_IsTrue(summary_j);
 
-    Ticket **tickets = ticket_list_filtered(global_db, project_id, status_id, limit, offset);
+    Ticket **tickets = ticket_list_filtered(global_db, project_id, status_id, type_filter, limit, offset);
     cJSON *arr = cJSON_CreateArray();
     if (!tickets) return mcp_tool_ok(id, arr);
 
@@ -617,6 +658,7 @@ static cJSON *tool_list_tickets(cJSON *id, cJSON *params) {
         cJSON_AddNumberToObject(o, "id", tickets[i]->id);
         cJSON_AddNumberToObject(o, "project_id", tickets[i]->project_id);
         cJSON_AddNumberToObject(o, "status_id", tickets[i]->status_id);
+        cJSON_AddStringToObject(o, "type", tickets[i]->type ? tickets[i]->type : "ticket");
         cJSON_AddStringToObject(o, "title", tickets[i]->title);
         if (!summary && tickets[i]->description)
             cJSON_AddStringToObject(o, "description", tickets[i]->description);
@@ -645,6 +687,7 @@ static cJSON *tool_get_ticket(cJSON *id, cJSON *params) {
     cJSON_AddNumberToObject(r, "project_id", t->project_id);
     cJSON_AddNumberToObject(r, "status_id", t->status_id);
     if (t->status_name) cJSON_AddStringToObject(r, "status_name", t->status_name);
+    cJSON_AddStringToObject(r, "type", t->type ? t->type : "ticket");
     cJSON_AddStringToObject(r, "title", t->title);
     if (t->description) cJSON_AddStringToObject(r, "description", t->description);
     if (t->assignee)    cJSON_AddStringToObject(r, "assignee", t->assignee);
@@ -675,6 +718,7 @@ static cJSON *tool_get_ticket_detailed(cJSON *id, cJSON *params) {
     cJSON_AddNumberToObject(ticket_j, "status_id", d->ticket->status_id);
     if (d->ticket->status_name)
         cJSON_AddStringToObject(ticket_j, "status_name", d->ticket->status_name);
+    cJSON_AddStringToObject(ticket_j, "type", d->ticket->type ? d->ticket->type : "ticket");
     if (include_ari && d->ticket->agent_role_instruction)
         cJSON_AddStringToObject(ticket_j, "agent_role_instruction",
                                 d->ticket->agent_role_instruction);
@@ -714,9 +758,33 @@ static cJSON *tool_get_ticket_detailed(cJSON *id, cJSON *params) {
         }
     }
 
+    cJSON *relations_arr = cJSON_CreateArray();
+    if (d->relations) {
+        for (int i = 0; d->relations[i]; i++) {
+            TicketRelation *rel = d->relations[i];
+            cJSON *rj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(rj, "id", rel->id);
+            cJSON_AddStringToObject(rj, "relation_type", rel->relation_type);
+            /* Expose direction relative to this ticket */
+            if (rel->from_ticket_id == d->ticket->id) {
+                cJSON_AddStringToObject(rj, "direction", "outgoing");
+                cJSON_AddNumberToObject(rj, "other_ticket_id", rel->to_ticket_id);
+                cJSON_AddStringToObject(rj, "other_ticket_title", rel->to_ticket_title);
+            } else {
+                cJSON_AddStringToObject(rj, "direction", "incoming");
+                cJSON_AddNumberToObject(rj, "other_ticket_id", rel->from_ticket_id);
+                cJSON_AddStringToObject(rj, "other_ticket_title", rel->from_ticket_title);
+            }
+            if (rel->created_at)
+                cJSON_AddStringToObject(rj, "created_at", rel->created_at);
+            cJSON_AddItemToArray(relations_arr, rj);
+        }
+    }
+
     cJSON *r = cJSON_CreateObject();
     cJSON_AddItemToObject(r, "ticket", ticket_j);
     cJSON_AddItemToObject(r, "tasks", tasks_arr);
+    cJSON_AddItemToObject(r, "relations", relations_arr);
     cJSON_AddItemToObject(r, "comments", comments_arr);
 
     ticket_detailed_free(d);
@@ -884,6 +952,48 @@ static cJSON *tool_list_comments(cJSON *id, cJSON *params) {
 }
 
 
+static cJSON *tool_link_tickets(cJSON *id, cJSON *params) {
+    cJSON *from_j = cJSON_GetObjectItemCaseSensitive(params, "from_ticket_id");
+    cJSON *to_j   = cJSON_GetObjectItemCaseSensitive(params, "to_ticket_id");
+    cJSON *rel_j  = cJSON_GetObjectItemCaseSensitive(params, "relation_type");
+
+    if (!cJSON_IsNumber(from_j) || !cJSON_IsNumber(to_j) || !cJSON_IsString(rel_j))
+        return mcp_tool_err(id,
+            "Missing required parameters: from_ticket_id, to_ticket_id, relation_type");
+
+    const char *rel = rel_j->valuestring;
+    if (strcmp(rel, "parent_of")    != 0 &&
+        strcmp(rel, "blocks")       != 0 &&
+        strcmp(rel, "duplicate_of") != 0 &&
+        strcmp(rel, "relates_to")   != 0)
+        return mcp_tool_err(id,
+            "Invalid relation_type: must be parent_of, blocks, duplicate_of, or relates_to");
+
+    if (!ticket_link(global_db, (int)from_j->valueint, (int)to_j->valueint, rel))
+        return mcp_tool_err(id, "Failed to create relation (may already exist or ticket not found)");
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "success", 1);
+    return mcp_tool_ok(id, r);
+}
+
+static cJSON *tool_unlink_tickets(cJSON *id, cJSON *params) {
+    cJSON *from_j = cJSON_GetObjectItemCaseSensitive(params, "from_ticket_id");
+    cJSON *to_j   = cJSON_GetObjectItemCaseSensitive(params, "to_ticket_id");
+    cJSON *rel_j  = cJSON_GetObjectItemCaseSensitive(params, "relation_type");
+
+    if (!cJSON_IsNumber(from_j) || !cJSON_IsNumber(to_j) || !cJSON_IsString(rel_j))
+        return mcp_tool_err(id,
+            "Missing required parameters: from_ticket_id, to_ticket_id, relation_type");
+
+    if (!ticket_unlink(global_db, (int)from_j->valueint, (int)to_j->valueint, rel_j->valuestring))
+        return mcp_tool_err(id, "Relation not found or could not be deleted");
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "success", 1);
+    return mcp_tool_ok(id, r);
+}
+
 static cJSON *tool_search_tickets(cJSON *id, cJSON *params) {
     cJSON *proj_j  = cJSON_GetObjectItemCaseSensitive(params, "project_id");
     cJSON *query_j = cJSON_GetObjectItemCaseSensitive(params, "query");
@@ -900,6 +1010,7 @@ static cJSON *tool_search_tickets(cJSON *id, cJSON *params) {
         cJSON_AddNumberToObject(o, "id", tickets[i]->id);
         cJSON_AddNumberToObject(o, "project_id", tickets[i]->project_id);
         cJSON_AddNumberToObject(o, "status_id", tickets[i]->status_id);
+        cJSON_AddStringToObject(o, "type", tickets[i]->type ? tickets[i]->type : "ticket");
         cJSON_AddStringToObject(o, "title", tickets[i]->title);
         if (tickets[i]->description)
             cJSON_AddStringToObject(o, "description", tickets[i]->description);
@@ -1003,6 +1114,8 @@ static cJSON *dispatch_tool(cJSON *id, const char *name, cJSON *params) {
     if (strcmp(name, "kb.ai_assign_ticket") == 0)       return tool_assign_ticket(id, params);
     if (strcmp(name, "kb.ai_update_ticket") == 0)       return tool_update_ticket(id, params);
     if (strcmp(name, "kb.ai_delete_ticket") == 0)       return tool_delete_ticket(id, params);
+    if (strcmp(name, "kb.ai_link_tickets") == 0)        return tool_link_tickets(id, params);
+    if (strcmp(name, "kb.ai_unlink_tickets") == 0)      return tool_unlink_tickets(id, params);
     if (strcmp(name, "kb.ai_add_task") == 0)            return tool_add_task(id, params);
     if (strcmp(name, "kb.ai_complete_task") == 0)       return tool_complete_task(id, params);
     if (strcmp(name, "kb.ai_add_comment") == 0)              return tool_add_comment(id, params);

@@ -9,7 +9,8 @@ BoardStatus *board_status_create(
     const char *name,
     const char *display_name,
     int position,
-    const char *agent_role_instruction
+    const char *agent_role_instruction,
+    const char *special_type
 ) {
     if (!db || !name || !display_name) return NULL;
 
@@ -19,19 +20,31 @@ BoardStatus *board_status_create(
 
     PGresult *res;
 
-    if (agent_role_instruction) {
-        const char *params[5] = {proj_str, name, display_name, pos_str, agent_role_instruction};
+    if (agent_role_instruction && special_type) {
+        const char *p[6] = {proj_str, name, display_name, pos_str, agent_role_instruction, special_type};
         res = PQexecParams(db->conn,
             "INSERT INTO board_statuses"
-            " (project_id, name, display_name, position, agent_role_instruction)"
+            " (project_id, name, display_name, position, agent_role_instruction, special_type)"
+            " VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+            6, NULL, p, NULL, NULL, 0);
+    } else if (agent_role_instruction) {
+        const char *p[5] = {proj_str, name, display_name, pos_str, agent_role_instruction};
+        res = PQexecParams(db->conn,
+            "INSERT INTO board_statuses (project_id, name, display_name, position, agent_role_instruction)"
             " VALUES ($1, $2, $3, $4, $5) RETURNING id",
-            5, NULL, params, NULL, NULL, 0);
+            5, NULL, p, NULL, NULL, 0);
+    } else if (special_type) {
+        const char *p[5] = {proj_str, name, display_name, pos_str, special_type};
+        res = PQexecParams(db->conn,
+            "INSERT INTO board_statuses (project_id, name, display_name, position, special_type)"
+            " VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            5, NULL, p, NULL, NULL, 0);
     } else {
-        const char *params[4] = {proj_str, name, display_name, pos_str};
+        const char *p[4] = {proj_str, name, display_name, pos_str};
         res = PQexecParams(db->conn,
             "INSERT INTO board_statuses (project_id, name, display_name, position)"
             " VALUES ($1, $2, $3, $4) RETURNING id",
-            4, NULL, params, NULL, NULL, 0);
+            4, NULL, p, NULL, NULL, 0);
     }
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
@@ -53,6 +66,7 @@ BoardStatus *board_status_create(
     bs->display_name         = strdup(display_name);
     bs->position             = position;
     bs->agent_role_instruction = agent_role_instruction ? strdup(agent_role_instruction) : NULL;
+    bs->special_type         = special_type ? strdup(special_type) : NULL;
     return bs;
 }
 
@@ -64,7 +78,7 @@ BoardStatus **board_status_list_by_project(DatabaseConnection *db, int project_i
     const char *params[1] = {id_str};
 
     PGresult *res = PQexecParams(db->conn,
-        "SELECT id, project_id, name, display_name, position, agent_role_instruction"
+        "SELECT id, project_id, name, display_name, position, agent_role_instruction, special_type"
         " FROM board_statuses WHERE project_id = $1 ORDER BY position",
         1, NULL, params, NULL, NULL, 0);
 
@@ -92,6 +106,9 @@ BoardStatus **board_status_list_by_project(DatabaseConnection *db, int project_i
 
         const char *ari = PQgetvalue(res, i, 5);
         arr[i]->agent_role_instruction = (ari && *ari) ? strdup(ari) : NULL;
+
+        const char *st = PQgetvalue(res, i, 6);
+        arr[i]->special_type = (st && *st) ? strdup(st) : NULL;
     }
 
     arr[count] = NULL;
@@ -172,6 +189,7 @@ void board_status_free(BoardStatus *bs) {
     free(bs->name);
     free(bs->display_name);
     free(bs->agent_role_instruction);
+    free(bs->special_type);
     free(bs);
 }
 

@@ -10,6 +10,7 @@ typedef struct {
     char *display_name;          /* human label, e.g. "In Arbeit" */
     int   position;              /* column order */
     char *agent_role_instruction; /* dynamic persona prompt; may be NULL */
+    char *special_type;          /* "human_intervention", "human_answered", or NULL */
 } BoardStatus;
 
 typedef struct {
@@ -23,7 +24,8 @@ BoardStatus  *board_status_create(
     const char *name,
     const char *display_name,
     int position,
-    const char *agent_role_instruction
+    const char *agent_role_instruction,
+    const char *special_type
 );
 
 BoardStatus **board_status_list_by_project(DatabaseConnection *db, int project_id);

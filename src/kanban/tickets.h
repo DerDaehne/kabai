@@ -11,6 +11,7 @@ typedef struct {
     int   id;
     int   project_id;
     int   status_id;
+    char *type;           /* "ticket" or "epic" */
     char *title;
     char *description;
     char *assignee;
@@ -23,6 +24,19 @@ typedef struct {
 } Ticket;
 
 /**
+ * @brief Directed relation between two tickets
+ */
+typedef struct {
+    int   id;
+    int   from_ticket_id;
+    char *from_ticket_title;
+    int   to_ticket_id;
+    char *to_ticket_title;
+    char *relation_type;  /* "parent_of", "blocks", "duplicate_of", "relates_to" */
+    char *created_at;
+} TicketRelation;
+
+/**
  * @brief Ticket Task structure (Acceptance Criteria)
  */
 typedef struct {
@@ -33,12 +47,13 @@ typedef struct {
 } TicketTask;
 
 /**
- * @brief Extended Ticket structure with tasks and comments
+ * @brief Extended Ticket structure with tasks, relations, and comments
  */
 typedef struct {
-    Ticket *ticket;
-    TicketTask **tasks;
-    TicketComment **comments;
+    Ticket          *ticket;
+    TicketTask      **tasks;
+    TicketRelation  **relations;
+    TicketComment   **comments;
 } TicketDetailed;
 
 /**
@@ -48,6 +63,7 @@ typedef struct {
  * @param status_id Initial status ID
  * @param title Ticket title
  * @param description Ticket description
+ * @param type "ticket" or "epic" (NULL defaults to "ticket")
  * @return Ticket* or NULL on failure
  */
 Ticket* ticket_create(
@@ -55,7 +71,8 @@ Ticket* ticket_create(
     int project_id,
     int status_id,
     const char *title,
-    const char *description
+    const char *description,
+    const char *type
 );
 
 /**
@@ -83,7 +100,7 @@ Ticket** ticket_list_by_project(DatabaseConnection *db, int project_id);
  * @param offset Results to skip (only used when limit > 0)
  * @return Array of Ticket* (NULL-terminated)
  */
-Ticket** ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id, int limit, int offset);
+Ticket** ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id, const char *type_filter, int limit, int offset);
 
 /**
  * @brief Search tickets by title/description substring (case-insensitive)
@@ -200,5 +217,29 @@ void ticket_task_free(TicketTask *task);
  * @param tasks NULL-terminated array of TicketTask*
  */
 void ticket_task_free_array(TicketTask **tasks);
+
+/* ---- Relations ---- */
+
+/**
+ * @brief Create a directed relation between two tickets
+ * @param relation_type One of: parent_of, blocks, duplicate_of, relates_to
+ * @return 1 on success, 0 on failure (including duplicate)
+ */
+int ticket_link(DatabaseConnection *db, int from_id, int to_id, const char *relation_type);
+
+/**
+ * @brief Remove a directed relation
+ * @return 1 on success, 0 on failure
+ */
+int ticket_unlink(DatabaseConnection *db, int from_id, int to_id, const char *relation_type);
+
+/**
+ * @brief Get all relations involving this ticket (as from OR to)
+ * @return NULL-terminated array, or NULL if none
+ */
+TicketRelation **ticket_get_relations(DatabaseConnection *db, int ticket_id);
+
+void ticket_relation_free(TicketRelation *r);
+void ticket_relation_free_array(TicketRelation **arr);
 
 #endif // KANBAN_TICKETS_H

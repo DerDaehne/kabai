@@ -14,7 +14,7 @@
       {
         packages.default = pkgs.stdenv.mkDerivation {
           name = "kbai";
-          version = "0.4.0";
+          version = "0.5.0";
           src = ./.;
 
           nativeBuildInputs = with pkgs; [ gcc pkg-config ];
