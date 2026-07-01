@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "kanban/projects.h"
-#include "kanban/board_statuses.h"
 #include "db/connection.h"
 
 Project *project_create(
@@ -35,25 +34,6 @@ Project *project_create(
 
     int id = atoi(PQgetvalue(res, 0, 0));
     PQclear(res);
-
-    /* Auto-create human-intervention statuses for every new project */
-    BoardStatus *hi = board_status_create(db, id,
-        "human_intervention", "Human Intervention", 98,
-        "Dieses Ticket wartet auf menschliche Intervention. "
-        "Lies alle Kommentare, beantworte die Frage des Agenten und "
-        "verschiebe das Ticket danach nach \"human_answered\".",
-        "human_intervention");
-    BoardStatus *ha = board_status_create(db, id,
-        "human_answered", "Human Answered", 99,
-        "Der Mensch hat geantwortet. Lies die neuesten Kommentare und "
-        "fahre mit der Arbeit fort. Verschiebe das Ticket in den passenden Folgestatus.",
-        "human_answered");
-
-    if (hi && ha)
-        status_transition_create(db, id, hi->id, ha->id);
-
-    board_status_free(hi);
-    board_status_free(ha);
 
     Project *p = malloc(sizeof(Project));
     if (!p) return NULL;
