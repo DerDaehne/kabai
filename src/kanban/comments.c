@@ -17,7 +17,7 @@ TicketComment *comment_add(
 
     PGresult *res = PQexecParams(db->conn,
         "INSERT INTO ticket_comments (ticket_id, author, comment_text)"
-        " VALUES ($1, $2, $3) RETURNING id",
+        " VALUES ($1, $2, $3) RETURNING id, created_at::text",
         3, NULL, params, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
@@ -27,15 +27,17 @@ TicketComment *comment_add(
     }
 
     int id = atoi(PQgetvalue(res, 0, 0));
-    PQclear(res);
+    const char *cat = PQgetvalue(res, 0, 1);
 
     TicketComment *c = malloc(sizeof(TicketComment));
-    if (!c) return NULL;
+    if (!c) { PQclear(res); return NULL; }
 
     c->id           = id;
     c->ticket_id    = ticket_id;
     c->author       = strdup(author);
     c->comment_text = strdup(comment_text);
+    c->created_at   = (cat && *cat) ? strdup(cat) : NULL;
+    PQclear(res);
     return c;
 }
 
@@ -47,7 +49,7 @@ TicketComment **comment_list_by_ticket(DatabaseConnection *db, int ticket_id) {
     const char *params[1] = {id_str};
 
     PGresult *res = PQexecParams(db->conn,
-        "SELECT id, ticket_id, author, comment_text"
+        "SELECT id, ticket_id, author, comment_text, created_at::text"
         " FROM ticket_comments WHERE ticket_id = $1 ORDER BY created_at",
         1, NULL, params, NULL, NULL, 0);
 
@@ -71,6 +73,8 @@ TicketComment **comment_list_by_ticket(DatabaseConnection *db, int ticket_id) {
         comments[i]->ticket_id    = atoi(PQgetvalue(res, i, 1));
         comments[i]->author       = strdup(PQgetvalue(res, i, 2));
         comments[i]->comment_text = strdup(PQgetvalue(res, i, 3));
+        const char *cat           = PQgetvalue(res, i, 4);
+        comments[i]->created_at   = (cat && *cat) ? strdup(cat) : NULL;
     }
 
     comments[count] = NULL;
@@ -86,7 +90,7 @@ TicketComment *comment_get_by_id(DatabaseConnection *db, int comment_id) {
     const char *params[1] = {id_str};
 
     PGresult *res = PQexecParams(db->conn,
-        "SELECT id, ticket_id, author, comment_text"
+        "SELECT id, ticket_id, author, comment_text, created_at::text"
         " FROM ticket_comments WHERE id = $1",
         1, NULL, params, NULL, NULL, 0);
 
@@ -102,6 +106,8 @@ TicketComment *comment_get_by_id(DatabaseConnection *db, int comment_id) {
     c->ticket_id    = atoi(PQgetvalue(res, 0, 1));
     c->author       = strdup(PQgetvalue(res, 0, 2));
     c->comment_text = strdup(PQgetvalue(res, 0, 3));
+    const char *cat = PQgetvalue(res, 0, 4);
+    c->created_at   = (cat && *cat) ? strdup(cat) : NULL;
 
     PQclear(res);
     return c;
@@ -151,6 +157,7 @@ void comment_free(TicketComment *c) {
     if (!c) return;
     free(c->author);
     free(c->comment_text);
+    free(c->created_at);
     free(c);
 }
 

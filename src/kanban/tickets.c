@@ -88,6 +88,8 @@ Ticket *ticket_create(
     t->description            = description ? strdup(description) : NULL;
     t->assignee               = NULL;
     t->model                  = NULL;
+    t->created_at             = NULL;
+    t->updated_at             = NULL;
     t->status_name            = NULL;
     t->agent_role_instruction = NULL;
     return t;
@@ -103,7 +105,7 @@ Ticket *ticket_get_by_id(DatabaseConnection *db, int ticket_id) {
     /* JOIN board_statuses to fetch status_name and agent_role_instruction */
     PGresult *res = PQexecParams(db->conn,
         "SELECT t.id, t.project_id, t.status_id, t.title, t.description, t.assignee, t.model,"
-        "       bs.name, bs.agent_role_instruction"
+        "       t.created_at::text, t.updated_at::text, bs.name, bs.agent_role_instruction"
         " FROM tickets t"
         " JOIN board_statuses bs ON bs.id = t.status_id"
         " WHERE t.id = $1",
@@ -131,32 +133,22 @@ Ticket *ticket_get_by_id(DatabaseConnection *db, int ticket_id) {
     const char *model = PQgetvalue(res, 0, 6);
     t->model = (model && *model) ? strdup(model) : NULL;
 
-    t->status_name = strdup(PQgetvalue(res, 0, 7));
+    const char *cat = PQgetvalue(res, 0, 7);
+    t->created_at = (cat && *cat) ? strdup(cat) : NULL;
 
-    const char *ari = PQgetvalue(res, 0, 8);
+    const char *uat = PQgetvalue(res, 0, 8);
+    t->updated_at = (uat && *uat) ? strdup(uat) : NULL;
+
+    t->status_name = strdup(PQgetvalue(res, 0, 9));
+
+    const char *ari = PQgetvalue(res, 0, 10);
     t->agent_role_instruction = (ari && *ari) ? strdup(ari) : NULL;
 
     PQclear(res);
     return t;
 }
 
-Ticket **ticket_list_by_project(DatabaseConnection *db, int project_id) {
-    if (!db) return NULL;
-
-    char id_str[32];
-    snprintf(id_str, sizeof(id_str), "%d", project_id);
-    const char *params[1] = {id_str};
-
-    PGresult *res = PQexecParams(db->conn,
-        "SELECT id, project_id, status_id, title, description, assignee"
-        " FROM tickets WHERE project_id = $1 ORDER BY created_at",
-        1, NULL, params, NULL, NULL, 0);
-
-    if (!res || PQntuples(res) == 0) {
-        if (res) PQclear(res);
-        return NULL;
-    }
-
+static Ticket **parse_ticket_rows(PGresult *res) {
     int count = PQntuples(res);
     Ticket **tickets = calloc(count + 1, sizeof(Ticket *));
     if (!tickets) { PQclear(res); return NULL; }
@@ -179,6 +171,12 @@ Ticket **ticket_list_by_project(DatabaseConnection *db, int project_id) {
         const char *assignee = PQgetvalue(res, i, 5);
         tickets[i]->assignee = (assignee && *assignee) ? strdup(assignee) : NULL;
 
+        const char *cat = PQgetvalue(res, i, 6);
+        tickets[i]->created_at = (cat && *cat) ? strdup(cat) : NULL;
+
+        const char *uat = PQgetvalue(res, i, 7);
+        tickets[i]->updated_at = (uat && *uat) ? strdup(uat) : NULL;
+
         tickets[i]->model                  = NULL;
         tickets[i]->status_name            = NULL;
         tickets[i]->agent_role_instruction = NULL;
@@ -187,6 +185,112 @@ Ticket **ticket_list_by_project(DatabaseConnection *db, int project_id) {
     tickets[count] = NULL;
     PQclear(res);
     return tickets;
+}
+
+Ticket **ticket_list_by_project(DatabaseConnection *db, int project_id) {
+    return ticket_list_filtered(db, project_id, 0, 0, 0);
+}
+
+Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id, int limit, int offset) {
+    if (!db) return NULL;
+
+    char proj_str[32], sid_str[32], lim_str[32], off_str[32];
+    snprintf(proj_str, sizeof(proj_str), "%d", project_id);
+    snprintf(sid_str,  sizeof(sid_str),  "%d", status_id);
+    snprintf(lim_str,  sizeof(lim_str),  "%d", limit);
+    snprintf(off_str,  sizeof(off_str),  "%d", offset);
+
+    PGresult *res;
+    if (status_id > 0 && limit > 0) {
+        const char *p[4] = {proj_str, sid_str, lim_str, off_str};
+        res = PQexecParams(db->conn,
+            "SELECT id, project_id, status_id, title, description, assignee,"
+            "       created_at::text, updated_at::text"
+            " FROM tickets WHERE project_id = $1 AND status_id = $2"
+            " ORDER BY created_at LIMIT $3 OFFSET $4",
+            4, NULL, p, NULL, NULL, 0);
+    } else if (status_id > 0) {
+        const char *p[2] = {proj_str, sid_str};
+        res = PQexecParams(db->conn,
+            "SELECT id, project_id, status_id, title, description, assignee,"
+            "       created_at::text, updated_at::text"
+            " FROM tickets WHERE project_id = $1 AND status_id = $2"
+            " ORDER BY created_at",
+            2, NULL, p, NULL, NULL, 0);
+    } else if (limit > 0) {
+        const char *p[3] = {proj_str, lim_str, off_str};
+        res = PQexecParams(db->conn,
+            "SELECT id, project_id, status_id, title, description, assignee,"
+            "       created_at::text, updated_at::text"
+            " FROM tickets WHERE project_id = $1"
+            " ORDER BY created_at LIMIT $2 OFFSET $3",
+            3, NULL, p, NULL, NULL, 0);
+    } else {
+        const char *p[1] = {proj_str};
+        res = PQexecParams(db->conn,
+            "SELECT id, project_id, status_id, title, description, assignee,"
+            "       created_at::text, updated_at::text"
+            " FROM tickets WHERE project_id = $1 ORDER BY created_at",
+            1, NULL, p, NULL, NULL, 0);
+    }
+
+    if (!res || PQntuples(res) == 0) {
+        if (res) PQclear(res);
+        return NULL;
+    }
+    return parse_ticket_rows(res);
+}
+
+Ticket **ticket_search(DatabaseConnection *db, int project_id, const char *query) {
+    if (!db || !query) return NULL;
+
+    char proj_str[32];
+    snprintf(proj_str, sizeof(proj_str), "%d", project_id);
+
+    /* Wrap query in % for ILIKE pattern matching */
+    size_t qlen = strlen(query);
+    char *pattern = malloc(qlen + 3);
+    if (!pattern) return NULL;
+    pattern[0] = '%';
+    memcpy(pattern + 1, query, qlen);
+    pattern[qlen + 1] = '%';
+    pattern[qlen + 2] = '\0';
+
+    const char *p[2] = {proj_str, pattern};
+    PGresult *res = PQexecParams(db->conn,
+        "SELECT id, project_id, status_id, title, description, assignee,"
+        "       created_at::text, updated_at::text"
+        " FROM tickets WHERE project_id = $1"
+        "   AND (title ILIKE $2 OR description ILIKE $2)"
+        " ORDER BY created_at LIMIT 50",
+        2, NULL, p, NULL, NULL, 0);
+    free(pattern);
+
+    if (!res || PQntuples(res) == 0) {
+        if (res) PQclear(res);
+        return NULL;
+    }
+    return parse_ticket_rows(res);
+}
+
+int ticket_delete(DatabaseConnection *db, int ticket_id) {
+    if (!db) return 0;
+
+    char id_str[32];
+    snprintf(id_str, sizeof(id_str), "%d", ticket_id);
+    const char *p[1] = {id_str};
+
+    PGresult *res = PQexecParams(db->conn,
+        "DELETE FROM tickets WHERE id = $1",
+        1, NULL, p, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        if (res) PQclear(res);
+        return 0;
+    }
+    int affected = atoi(PQcmdTuples(res));
+    PQclear(res);
+    return affected > 0;
 }
 
 int ticket_update_status(DatabaseConnection *db, int ticket_id, int new_status_id) {
@@ -394,6 +498,8 @@ void ticket_free(Ticket *t) {
     free(t->description);
     free(t->assignee);
     free(t->model);
+    free(t->created_at);
+    free(t->updated_at);
     free(t->status_name);
     free(t->agent_role_instruction);
     free(t);

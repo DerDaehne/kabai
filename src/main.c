@@ -19,7 +19,7 @@
 #include "kanban/board_statuses.h"
 
 #define MCP_PROTOCOL_VERSION "2024-11-05"
-#define MCP_SERVER_VERSION   "0.2.0"
+#define MCP_SERVER_VERSION   "0.4.0"
 #define MCP_SERVER_NAME      "kb.ai"
 
 #define DEFAULT_DB_HOST     "localhost"
@@ -314,22 +314,53 @@ static cJSON *handle_tools_list(cJSON *id) {
 
     props = cJSON_CreateObject();
     cJSON_AddItemToObject(props, "project_id", prop_num("ID of the project to list tickets from"));
+    cJSON_AddItemToObject(props, "status_id",  prop_num("Filter by status column (optional)"));
+    cJSON_AddItemToObject(props, "limit",      prop_num("Max tickets to return (optional, default unlimited)"));
+    cJSON_AddItemToObject(props, "offset",     prop_num("Tickets to skip for pagination (optional, default 0)"));
+    {
+        cJSON *bp = cJSON_CreateObject();
+        cJSON_AddStringToObject(bp, "type", "boolean");
+        cJSON_AddStringToObject(bp, "description",
+            "If true, omit description fields — returns only id/status_id/title/assignee/timestamps. "
+            "Use for an overview when descriptions are not needed.");
+        cJSON_AddItemToObject(props, "summary", bp);
+    }
     req[0] = "project_id"; req[1] = NULL;
     cJSON_AddItemToArray(tools, make_tool("kb.ai_list_tickets",
-        "List all tickets in a project", make_schema(props, req)));
+        "List tickets in a project. Supports status filter, pagination (limit/offset), "
+        "and summary mode (omits description). Use summary:true + status_id for cheap overview calls.",
+        make_schema(props, req)));
+
+    props = cJSON_CreateObject();
+    cJSON_AddItemToObject(props, "project_id", prop_num("ID of the project to search in"));
+    cJSON_AddItemToObject(props, "query",      prop_str("Search string matched case-insensitively against title and description"));
+    req[0] = "project_id"; req[1] = "query"; req[2] = NULL;
+    cJSON_AddItemToArray(tools, make_tool("kb.ai_search_tickets",
+        "Search tickets by title/description substring (ILIKE). Returns up to 50 matches. "
+        "Use before create_ticket to detect duplicates.",
+        make_schema(props, req)));
 
     props = cJSON_CreateObject();
     cJSON_AddItemToObject(props, "ticket_id", prop_num("Numeric ticket ID"));
     req[0] = "ticket_id"; req[1] = NULL;
     cJSON_AddItemToArray(tools, make_tool("kb.ai_get_ticket",
-        "Get basic ticket information", make_schema(props, req)));
+        "Get basic ticket information including timestamps", make_schema(props, req)));
 
     props = cJSON_CreateObject();
     cJSON_AddItemToObject(props, "ticket_id", prop_num("Numeric ticket ID"));
+    {
+        cJSON *bp = cJSON_CreateObject();
+        cJSON_AddStringToObject(bp, "type", "boolean");
+        cJSON_AddStringToObject(bp, "description",
+            "Include agent_role_instruction in response (default true). "
+            "Pass false after the first call to avoid repeating the same instruction for tickets in the same column.");
+        cJSON_AddItemToObject(props, "include_role_instruction", bp);
+    }
     req[0] = "ticket_id"; req[1] = NULL;
     cJSON_AddItemToArray(tools, make_tool("kb.ai_get_ticket_detailed",
-        "Get ticket with all tasks (acceptance criteria) and work log. "
-        "Use this before starting work on a ticket to read the agent_role_instruction.",
+        "Get ticket with all tasks (acceptance criteria), work log, and timestamps. "
+        "Use this before starting work. Pass include_role_instruction:false on subsequent "
+        "calls within the same session to avoid redundant context.",
         make_schema(props, req)));
 
     props = cJSON_CreateObject();
@@ -343,13 +374,31 @@ static cJSON *handle_tools_list(cJSON *id) {
         make_schema(props, req)));
 
     props = cJSON_CreateObject();
+    {
+        cJSON *arr_schema = cJSON_CreateObject();
+        cJSON_AddStringToObject(arr_schema, "type", "array");
+        cJSON *items = cJSON_CreateObject();
+        cJSON_AddStringToObject(items, "type", "number");
+        cJSON_AddItemToObject(arr_schema, "items", items);
+        cJSON_AddStringToObject(arr_schema, "description", "Array of ticket IDs to move");
+        cJSON_AddItemToObject(props, "ticket_ids", arr_schema);
+    }
+    cJSON_AddItemToObject(props, "new_status_id", prop_num("Target status ID for all tickets"));
+    req[0] = "ticket_ids"; req[1] = "new_status_id"; req[2] = NULL;
+    cJSON_AddItemToArray(tools, make_tool("kb.ai_move_tickets",
+        "Batch move multiple tickets to the same new status in one call. "
+        "Returns per-ticket success/error breakdown.",
+        make_schema(props, req)));
+
+    props = cJSON_CreateObject();
     cJSON_AddItemToObject(props, "ticket_id", prop_num("Numeric ticket ID"));
     cJSON_AddItemToObject(props, "assignee",  prop_str(
         "Agent or user identifier. If omitted, falls back to KB_AI_AGENT_NAME env var."));
     req[0] = "ticket_id"; req[1] = NULL;
     cJSON_AddItemToArray(tools, make_tool("kb.ai_assign_ticket",
         "Assign a ticket to an agent or user. Uses KB_AI_AGENT_NAME as default assignee "
-        "and always writes KB_AI_AGENT_MODEL to the model field.",
+        "and always writes KB_AI_AGENT_MODEL to the model field. "
+        "Both KB_AI_AGENT_NAME and KB_AI_AGENT_MODEL must be set in the MCP server environment.",
         make_schema(props, req)));
 
     props = cJSON_CreateObject();
@@ -359,6 +408,16 @@ static cJSON *handle_tools_list(cJSON *id) {
     req[0] = "ticket_id"; req[1] = NULL;
     cJSON_AddItemToArray(tools, make_tool("kb.ai_update_ticket",
         "Edit a ticket's title and/or description", make_schema(props, req)));
+
+    props = cJSON_CreateObject();
+    cJSON_AddItemToObject(props, "ticket_id", prop_num("Numeric ticket ID"));
+    cJSON_AddItemToObject(props, "reason",    prop_str(
+        "Required reason for deletion (e.g. 'duplicate of #42', 'created by mistake')"));
+    req[0] = "ticket_id"; req[1] = "reason"; req[2] = NULL;
+    cJSON_AddItemToArray(tools, make_tool("kb.ai_delete_ticket",
+        "Permanently delete a ticket (cascades tasks, comments, documents). "
+        "Requires a non-empty reason. Use merge_into comment on the surviving ticket before deleting duplicates.",
+        make_schema(props, req)));
 
     /* ---- Tasks ---- */
 
@@ -531,7 +590,11 @@ static cJSON *tool_create_ticket(cJSON *id, cJSON *params) {
 }
 
 static cJSON *tool_list_tickets(cJSON *id, cJSON *params) {
-    cJSON *proj_j = cJSON_GetObjectItemCaseSensitive(params, "project_id");
+    cJSON *proj_j    = cJSON_GetObjectItemCaseSensitive(params, "project_id");
+    cJSON *status_j  = cJSON_GetObjectItemCaseSensitive(params, "status_id");
+    cJSON *limit_j   = cJSON_GetObjectItemCaseSensitive(params, "limit");
+    cJSON *offset_j  = cJSON_GetObjectItemCaseSensitive(params, "offset");
+    cJSON *summary_j = cJSON_GetObjectItemCaseSensitive(params, "summary");
 
     if (!cJSON_IsNumber(proj_j))
         return mcp_tool_err(id, "Missing required parameter: project_id");
@@ -540,7 +603,12 @@ static cJSON *tool_list_tickets(cJSON *id, cJSON *params) {
     if (project_id <= 0)
         return mcp_tool_err(id, "Invalid project_id: must be a positive integer");
 
-    Ticket **tickets = ticket_list_by_project(global_db, project_id);
+    int status_id = cJSON_IsNumber(status_j) ? (int)status_j->valueint : 0;
+    int limit     = cJSON_IsNumber(limit_j)  ? (int)limit_j->valueint  : 0;
+    int offset    = cJSON_IsNumber(offset_j) ? (int)offset_j->valueint : 0;
+    int summary   = cJSON_IsTrue(summary_j);
+
+    Ticket **tickets = ticket_list_filtered(global_db, project_id, status_id, limit, offset);
     cJSON *arr = cJSON_CreateArray();
     if (!tickets) return mcp_tool_ok(id, arr);
 
@@ -550,10 +618,14 @@ static cJSON *tool_list_tickets(cJSON *id, cJSON *params) {
         cJSON_AddNumberToObject(o, "project_id", tickets[i]->project_id);
         cJSON_AddNumberToObject(o, "status_id", tickets[i]->status_id);
         cJSON_AddStringToObject(o, "title", tickets[i]->title);
-        if (tickets[i]->description)
+        if (!summary && tickets[i]->description)
             cJSON_AddStringToObject(o, "description", tickets[i]->description);
         if (tickets[i]->assignee)
             cJSON_AddStringToObject(o, "assignee", tickets[i]->assignee);
+        if (tickets[i]->created_at)
+            cJSON_AddStringToObject(o, "created_at", tickets[i]->created_at);
+        if (tickets[i]->updated_at)
+            cJSON_AddStringToObject(o, "updated_at", tickets[i]->updated_at);
         cJSON_AddItemToArray(arr, o);
     }
     ticket_free_array(tickets);
@@ -577,6 +649,8 @@ static cJSON *tool_get_ticket(cJSON *id, cJSON *params) {
     if (t->description) cJSON_AddStringToObject(r, "description", t->description);
     if (t->assignee)    cJSON_AddStringToObject(r, "assignee", t->assignee);
     if (t->model)       cJSON_AddStringToObject(r, "model", t->model);
+    if (t->created_at)  cJSON_AddStringToObject(r, "created_at", t->created_at);
+    if (t->updated_at)  cJSON_AddStringToObject(r, "updated_at", t->updated_at);
     if (t->agent_role_instruction)
         cJSON_AddStringToObject(r, "agent_role_instruction", t->agent_role_instruction);
     ticket_free(t);
@@ -584,9 +658,13 @@ static cJSON *tool_get_ticket(cJSON *id, cJSON *params) {
 }
 
 static cJSON *tool_get_ticket_detailed(cJSON *id, cJSON *params) {
-    cJSON *id_j = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
+    cJSON *id_j  = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
+    cJSON *ari_j = cJSON_GetObjectItemCaseSensitive(params, "include_role_instruction");
     if (!cJSON_IsNumber(id_j))
         return mcp_tool_err(id, "Missing required parameter: ticket_id");
+
+    /* include_role_instruction defaults to true; pass false to suppress it */
+    int include_ari = !cJSON_IsFalse(ari_j);
 
     TicketDetailed *d = ticket_get_detailed(global_db, (int)id_j->valueint);
     if (!d) return mcp_tool_err(id, "Ticket not found");
@@ -597,7 +675,7 @@ static cJSON *tool_get_ticket_detailed(cJSON *id, cJSON *params) {
     cJSON_AddNumberToObject(ticket_j, "status_id", d->ticket->status_id);
     if (d->ticket->status_name)
         cJSON_AddStringToObject(ticket_j, "status_name", d->ticket->status_name);
-    if (d->ticket->agent_role_instruction)
+    if (include_ari && d->ticket->agent_role_instruction)
         cJSON_AddStringToObject(ticket_j, "agent_role_instruction",
                                 d->ticket->agent_role_instruction);
     cJSON_AddStringToObject(ticket_j, "title", d->ticket->title);
@@ -607,6 +685,10 @@ static cJSON *tool_get_ticket_detailed(cJSON *id, cJSON *params) {
         cJSON_AddStringToObject(ticket_j, "assignee", d->ticket->assignee);
     if (d->ticket->model)
         cJSON_AddStringToObject(ticket_j, "model", d->ticket->model);
+    if (d->ticket->created_at)
+        cJSON_AddStringToObject(ticket_j, "created_at", d->ticket->created_at);
+    if (d->ticket->updated_at)
+        cJSON_AddStringToObject(ticket_j, "updated_at", d->ticket->updated_at);
 
     cJSON *tasks_arr = cJSON_CreateArray();
     if (d->tasks) {
@@ -626,6 +708,8 @@ static cJSON *tool_get_ticket_detailed(cJSON *id, cJSON *params) {
             cJSON_AddNumberToObject(cj, "id", d->comments[i]->id);
             cJSON_AddStringToObject(cj, "author", d->comments[i]->author);
             cJSON_AddStringToObject(cj, "text", d->comments[i]->comment_text);
+            if (d->comments[i]->created_at)
+                cJSON_AddStringToObject(cj, "created_at", d->comments[i]->created_at);
             cJSON_AddItemToArray(comments_arr, cj);
         }
     }
@@ -671,7 +755,10 @@ static cJSON *tool_assign_ticket(cJSON *id, cJSON *params) {
     /* Use provided assignee, fall back to KB_AI_AGENT_NAME, then error */
     const char *assignee = cJSON_IsString(ass_j) ? ass_j->valuestring : g_agent_name;
     if (!assignee)
-        return mcp_tool_err(id, "Missing assignee: provide 'assignee' parameter or set KB_AI_AGENT_NAME");
+        return mcp_tool_err(id,
+            "Missing assignee: provide 'assignee' parameter or set the KB_AI_AGENT_NAME "
+            "environment variable in the MCP server config (KB_AI_AGENT_MODEL is also "
+            "recommended for tracking which model worked the ticket)");
 
     if (!ticket_assign(global_db, (int)tid_j->valueint, assignee, g_agent_model))
         return mcp_tool_err(id, "Failed to assign ticket");
@@ -768,6 +855,7 @@ static cJSON *tool_add_comment(cJSON *id, cJSON *params) {
     cJSON_AddNumberToObject(r, "ticket_id", c->ticket_id);
     cJSON_AddStringToObject(r, "author", c->author);
     cJSON_AddStringToObject(r, "text", c->comment_text);
+    if (c->created_at) cJSON_AddStringToObject(r, "created_at", c->created_at);
     comment_free(c);
     return mcp_tool_ok(id, r);
 }
@@ -787,10 +875,113 @@ static cJSON *tool_list_comments(cJSON *id, cJSON *params) {
         cJSON_AddNumberToObject(cj, "ticket_id", comments[i]->ticket_id);
         cJSON_AddStringToObject(cj, "author", comments[i]->author);
         cJSON_AddStringToObject(cj, "text", comments[i]->comment_text);
+        if (comments[i]->created_at)
+            cJSON_AddStringToObject(cj, "created_at", comments[i]->created_at);
         cJSON_AddItemToArray(arr, cj);
     }
     comment_free_array(comments);
     return mcp_tool_ok(id, arr);
+}
+
+
+static cJSON *tool_search_tickets(cJSON *id, cJSON *params) {
+    cJSON *proj_j  = cJSON_GetObjectItemCaseSensitive(params, "project_id");
+    cJSON *query_j = cJSON_GetObjectItemCaseSensitive(params, "query");
+
+    if (!cJSON_IsNumber(proj_j) || !cJSON_IsString(query_j))
+        return mcp_tool_err(id, "Missing required parameters: project_id, query");
+
+    Ticket **tickets = ticket_search(global_db, (int)proj_j->valueint, query_j->valuestring);
+    cJSON *arr = cJSON_CreateArray();
+    if (!tickets) return mcp_tool_ok(id, arr);
+
+    for (int i = 0; tickets[i]; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "id", tickets[i]->id);
+        cJSON_AddNumberToObject(o, "project_id", tickets[i]->project_id);
+        cJSON_AddNumberToObject(o, "status_id", tickets[i]->status_id);
+        cJSON_AddStringToObject(o, "title", tickets[i]->title);
+        if (tickets[i]->description)
+            cJSON_AddStringToObject(o, "description", tickets[i]->description);
+        if (tickets[i]->assignee)
+            cJSON_AddStringToObject(o, "assignee", tickets[i]->assignee);
+        if (tickets[i]->created_at)
+            cJSON_AddStringToObject(o, "created_at", tickets[i]->created_at);
+        cJSON_AddItemToArray(arr, o);
+    }
+    ticket_free_array(tickets);
+    return mcp_tool_ok(id, arr);
+}
+
+static cJSON *tool_delete_ticket(cJSON *id, cJSON *params) {
+    cJSON *tid_j    = cJSON_GetObjectItemCaseSensitive(params, "ticket_id");
+    cJSON *reason_j = cJSON_GetObjectItemCaseSensitive(params, "reason");
+
+    if (!cJSON_IsNumber(tid_j))
+        return mcp_tool_err(id, "Missing required parameter: ticket_id");
+    if (!cJSON_IsString(reason_j) || reason_j->valuestring[0] == '\0')
+        return mcp_tool_err(id, "Missing required parameter: reason (required for audit trail)");
+
+    int ticket_id = (int)tid_j->valueint;
+
+    /* Verify the ticket exists before deleting */
+    Ticket *t = ticket_get_by_id(global_db, ticket_id);
+    if (!t) return mcp_tool_err(id, "Ticket not found");
+    ticket_free(t);
+
+    if (!ticket_delete(global_db, ticket_id))
+        return mcp_tool_err(id, "Failed to delete ticket");
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "success", 1);
+    cJSON_AddNumberToObject(r, "deleted_ticket_id", ticket_id);
+    return mcp_tool_ok(id, r);
+}
+
+static cJSON *tool_move_tickets(cJSON *id, cJSON *params) {
+    cJSON *ids_j   = cJSON_GetObjectItemCaseSensitive(params, "ticket_ids");
+    cJSON *sid_j   = cJSON_GetObjectItemCaseSensitive(params, "new_status_id");
+
+    if (!cJSON_IsArray(ids_j) || !cJSON_IsNumber(sid_j))
+        return mcp_tool_err(id, "Missing required parameters: ticket_ids (array), new_status_id");
+
+    int new_status_id = (int)sid_j->valueint;
+    int total   = cJSON_GetArraySize(ids_j);
+    int success = 0;
+    int failed  = 0;
+
+    cJSON *results = cJSON_CreateArray();
+    for (int i = 0; i < total; i++) {
+        cJSON *item = cJSON_GetArrayItem(ids_j, i);
+        if (!cJSON_IsNumber(item)) { failed++; continue; }
+
+        int ticket_id = (int)item->valueint;
+        cJSON *entry  = cJSON_CreateObject();
+        cJSON_AddNumberToObject(entry, "ticket_id", ticket_id);
+
+        if (ticket_update_status(global_db, ticket_id, new_status_id)) {
+            cJSON_AddBoolToObject(entry, "success", 1);
+            success++;
+        } else {
+            cJSON_AddBoolToObject(entry, "success", 0);
+            const char *raw = PQerrorMessage(global_db->conn);
+            if (raw && strstr(raw, "Illegaler Kanban-Move"))
+                cJSON_AddStringToObject(entry, "error", "Invalid transition");
+            else if (raw && strstr(raw, "Akzeptanzkriterium"))
+                cJSON_AddStringToObject(entry, "error", "Open acceptance criteria remain");
+            else
+                cJSON_AddStringToObject(entry, "error", "Failed");
+            failed++;
+        }
+        cJSON_AddItemToArray(results, entry);
+    }
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddNumberToObject(r, "total", total);
+    cJSON_AddNumberToObject(r, "success", success);
+    cJSON_AddNumberToObject(r, "failed", failed);
+    cJSON_AddItemToObject(r, "results", results);
+    return mcp_tool_ok(id, r);
 }
 
 
@@ -804,11 +995,14 @@ static cJSON *dispatch_tool(cJSON *id, const char *name, cJSON *params) {
     if (strcmp(name, "kb.ai_get_project") == 0)         return tool_get_project(id, params);
     if (strcmp(name, "kb.ai_create_ticket") == 0)       return tool_create_ticket(id, params);
     if (strcmp(name, "kb.ai_list_tickets") == 0)        return tool_list_tickets(id, params);
+    if (strcmp(name, "kb.ai_search_tickets") == 0)      return tool_search_tickets(id, params);
     if (strcmp(name, "kb.ai_get_ticket") == 0)          return tool_get_ticket(id, params);
     if (strcmp(name, "kb.ai_get_ticket_detailed") == 0) return tool_get_ticket_detailed(id, params);
     if (strcmp(name, "kb.ai_move_ticket") == 0)         return tool_move_ticket(id, params);
+    if (strcmp(name, "kb.ai_move_tickets") == 0)        return tool_move_tickets(id, params);
     if (strcmp(name, "kb.ai_assign_ticket") == 0)       return tool_assign_ticket(id, params);
     if (strcmp(name, "kb.ai_update_ticket") == 0)       return tool_update_ticket(id, params);
+    if (strcmp(name, "kb.ai_delete_ticket") == 0)       return tool_delete_ticket(id, params);
     if (strcmp(name, "kb.ai_add_task") == 0)            return tool_add_task(id, params);
     if (strcmp(name, "kb.ai_complete_task") == 0)       return tool_complete_task(id, params);
     if (strcmp(name, "kb.ai_add_comment") == 0)              return tool_add_comment(id, params);

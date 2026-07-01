@@ -15,6 +15,8 @@ typedef struct {
     char *description;
     char *assignee;
     char *model;
+    char *created_at;
+    char *updated_at;
     /* Populated by ticket_get_by_id (via JOIN); NULL in list results */
     char *status_name;
     char *agent_role_instruction;
@@ -71,6 +73,34 @@ Ticket* ticket_get_by_id(DatabaseConnection *db, int ticket_id);
  * @return Array of Ticket* (NULL-terminated)
  */
 Ticket** ticket_list_by_project(DatabaseConnection *db, int project_id);
+
+/**
+ * @brief List tickets with optional status filter and pagination
+ * @param db Database connection
+ * @param project_id Project ID
+ * @param status_id Filter by status (0 = no filter)
+ * @param limit Max results (0 = no limit)
+ * @param offset Results to skip (only used when limit > 0)
+ * @return Array of Ticket* (NULL-terminated)
+ */
+Ticket** ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id, int limit, int offset);
+
+/**
+ * @brief Search tickets by title/description substring (case-insensitive)
+ * @param db Database connection
+ * @param project_id Project ID
+ * @param query Search string (matched with ILIKE)
+ * @return Array of Ticket* (NULL-terminated), max 50 results
+ */
+Ticket** ticket_search(DatabaseConnection *db, int project_id, const char *query);
+
+/**
+ * @brief Delete a ticket (cascades tasks, comments, documents)
+ * @param db Database connection
+ * @param ticket_id Ticket ID
+ * @return 1 on success, 0 on failure
+ */
+int ticket_delete(DatabaseConnection *db, int ticket_id);
 
 /**
  * @brief Update ticket status

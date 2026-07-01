@@ -11,6 +11,7 @@ typedef struct {
     int ticket_id;
     char *author;
     char *comment_text;
+    char *created_at;
 } TicketComment;
 
 /**
