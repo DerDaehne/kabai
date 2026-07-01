@@ -1,5 +1,0 @@
-2026-06-24 15:58:33.949 CEST [229311] LOG:  starting PostgreSQL 17.10 on x86_64-pc-linux-gnu, compiled by clang version 21.1.8, 64-bit
-2026-06-24 15:58:33.949 CEST [229311] LOG:  listening on IPv6 address "::1", port 5432
-2026-06-24 15:58:33.949 CEST [229311] LOG:  listening on IPv4 address "127.0.0.1", port 5432
-2026-06-24 15:58:33.950 CEST [229311] FATAL:  could not create lock file "/run/postgresql/.s.PGSQL.5432.lock": No such file or directory
-2026-06-24 15:58:33.952 CEST [229311] LOG:  database system is shut down
