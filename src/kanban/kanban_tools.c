@@ -1,3 +1,5 @@
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "kanban/kanban_tools.h"
 #include "mcp/schema.h"
@@ -270,11 +272,38 @@ static cJSON *tool_get_ticket_detailed(McpContext *ctx, cJSON *id, cJSON *params
         }
     }
 
+    /* Linked knowledge-base notes (kbai-docs, note_ticket_links) — metadata
+     * only; fetch bodies via kb.ai_docs_get_note. */
+    cJSON *notes_arr = cJSON_CreateArray();
+    {
+        char tid_str[32];
+        snprintf(tid_str, sizeof(tid_str), "%d", d->ticket->id);
+        const char *np[1] = {tid_str};
+        PGresult *nres = PQexecParams(ctx->db->conn,
+            "SELECT n.id, n.slug, n.title, n.kind, ntl.relation "
+            "  FROM note_ticket_links ntl JOIN notes n ON n.id = ntl.note_id "
+            " WHERE ntl.ticket_id = $1 ORDER BY n.id",
+            1, NULL, np, NULL, NULL, 0);
+        if (nres && PQresultStatus(nres) == PGRES_TUPLES_OK) {
+            for (int i = 0; i < PQntuples(nres); i++) {
+                cJSON *nj = cJSON_CreateObject();
+                cJSON_AddNumberToObject(nj, "note_id", atoi(PQgetvalue(nres, i, 0)));
+                cJSON_AddStringToObject(nj, "slug", PQgetvalue(nres, i, 1));
+                cJSON_AddStringToObject(nj, "title", PQgetvalue(nres, i, 2));
+                cJSON_AddStringToObject(nj, "kind", PQgetvalue(nres, i, 3));
+                cJSON_AddStringToObject(nj, "relation", PQgetvalue(nres, i, 4));
+                cJSON_AddItemToArray(notes_arr, nj);
+            }
+        }
+        if (nres) PQclear(nres);
+    }
+
     cJSON *r = cJSON_CreateObject();
     cJSON_AddItemToObject(r, "ticket", ticket_j);
     cJSON_AddItemToObject(r, "tasks", tasks_arr);
     cJSON_AddItemToObject(r, "relations", relations_arr);
     cJSON_AddItemToObject(r, "comments", comments_arr);
+    cJSON_AddItemToObject(r, "linked_notes", notes_arr);
 
     ticket_detailed_free(d);
     return mcp_tool_ok(id, r);
@@ -715,8 +744,9 @@ void kanban_register_tools(McpRegistry *r) {
         "Pass false after the first call to avoid repeating the same instruction for tickets in the same column.",
         false);
     mcp_registry_add(r, "kb.ai_get_ticket_detailed",
-        "Get ticket with all tasks (acceptance criteria), work log, and timestamps. "
-        "Use this before starting work. Pass include_role_instruction:false on subsequent "
+        "Get ticket with all tasks (acceptance criteria), work log, timestamps, and "
+        "linked knowledge-base notes (linked_notes — read them via kb.ai_docs_get_note "
+        "before starting work). Pass include_role_instruction:false on subsequent "
         "calls within the same session to avoid redundant context.",
         s, tool_get_ticket_detailed);
 

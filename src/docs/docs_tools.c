@@ -522,6 +522,64 @@ static cJSON *tool_docs_list_notes(McpContext *ctx, cJSON *id, cJSON *params) {
 
 
 /* ============================================================================
+ * Ticket links (kbai-docs #325)
+ * ============================================================================ */
+
+static cJSON *tool_docs_link_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
+    int note_id, ticket_id;
+    const char *relation = param_str(params, "relation");
+    if (!param_num(params, "note_id", &note_id) ||
+        !param_num(params, "ticket_id", &ticket_id) || !relation)
+        return mcp_tool_err(id, "Missing required parameters: note_id, ticket_id, relation");
+
+    char note_str[32], ticket_str[32];
+    snprintf(note_str, sizeof(note_str), "%d", note_id);
+    snprintf(ticket_str, sizeof(ticket_str), "%d", ticket_id);
+    const char *q_params[3] = {note_str, ticket_str, relation};
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "INSERT INTO note_ticket_links (note_id, ticket_id, relation) VALUES ($1, $2, $3)",
+        3, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        const char *msg = docs_db_error(res);
+        if (res) PQclear(res);
+        return mcp_tool_err(id, msg ? msg : "Failed to link note to ticket");
+    }
+    PQclear(res);
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "success", 1);
+    return mcp_tool_ok(id, r);
+}
+
+static cJSON *tool_docs_unlink_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
+    int note_id, ticket_id;
+    const char *relation = param_str(params, "relation");
+    if (!param_num(params, "note_id", &note_id) ||
+        !param_num(params, "ticket_id", &ticket_id) || !relation)
+        return mcp_tool_err(id, "Missing required parameters: note_id, ticket_id, relation");
+
+    char note_str[32], ticket_str[32];
+    snprintf(note_str, sizeof(note_str), "%d", note_id);
+    snprintf(ticket_str, sizeof(ticket_str), "%d", ticket_id);
+    const char *q_params[3] = {note_str, ticket_str, relation};
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "DELETE FROM note_ticket_links WHERE note_id = $1 AND ticket_id = $2 AND relation = $3",
+        3, NULL, q_params, NULL, NULL, 0);
+
+    int deleted = (res && PQresultStatus(res) == PGRES_COMMAND_OK)
+                ? atoi(PQcmdTuples(res)) : 0;
+    if (res) PQclear(res);
+    if (!deleted)
+        return mcp_tool_err(id, "Link not found or could not be deleted");
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "success", 1);
+    return mcp_tool_ok(id, r);
+}
+
+
+/* ============================================================================
  * Search (kbai-docs #323)
  * ============================================================================ */
 
@@ -746,4 +804,25 @@ void docs_register_tools(McpRegistry *r) {
         "for judging retrieval cost. Use this BEFORE create_note to detect duplicates and "
         "BEFORE reading code to check what is already documented.",
         s, tool_docs_search);
+
+    s = schema_new();
+    schema_num(s, "note_id",   "Numeric note ID", true);
+    schema_num(s, "ticket_id", "Numeric ticket ID", true);
+    schema_str(s, "relation",
+        "One of: documents (note documents what the ticket built), created_by (ticket "
+        "produced this note), verified_by (ticket confirmed the note is current), "
+        "references (loose relation)", true);
+    mcp_registry_add(r, "kb.ai_docs_link_ticket",
+        "Link a note to a ticket, structurally and queryable from both sides "
+        "(get_note shows ticket_links; kb.ai_get_ticket_detailed shows linked_notes). "
+        "Link notes you create or update while working a ticket — that is how later "
+        "agents find the relevant knowledge without grepping.",
+        s, tool_docs_link_ticket);
+
+    s = schema_new();
+    schema_num(s, "note_id",   "Numeric note ID", true);
+    schema_num(s, "ticket_id", "Numeric ticket ID", true);
+    schema_str(s, "relation",  "The relation to remove (must match exactly what was created)", true);
+    mcp_registry_add(r, "kb.ai_docs_unlink_ticket",
+        "Remove a note-ticket link", s, tool_docs_unlink_ticket);
 }
