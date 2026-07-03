@@ -366,6 +366,162 @@ static cJSON *tool_docs_unassign_project(McpContext *ctx, cJSON *id, cJSON *para
 
 
 /* ============================================================================
+ * Read API (kbai-docs #324)
+ * ============================================================================ */
+
+static cJSON *tool_docs_get_note(McpContext *ctx, cJSON *id, cJSON *params) {
+    int note_id = 0;
+    param_num(params, "note_id", &note_id);
+    const char *slug = param_str(params, "slug");
+    if (note_id <= 0 && !slug)
+        return mcp_tool_err(id, "Missing required parameter: note_id or slug");
+
+    char note_id_str[32];
+    snprintf(note_id_str, sizeof(note_id_str), "%d", note_id);
+    const char *q_params[2] = {note_id > 0 ? note_id_str : NULL, slug};
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "SELECT id, slug, title, kind, tags::text, archived, body, "
+        "       created_at::text, updated_at::text, "
+        "       last_verified_ticket_id, last_verified_at::text "
+        "FROM notes WHERE ($1::int IS NOT NULL AND id = $1) "
+        "   OR ($1::int IS NULL AND slug = $2)",
+        2, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id, "Note not found");
+    }
+
+    cJSON *note = note_row_brief(res, 0);
+    cJSON_AddStringToObject(note, "body", PQgetvalue(res, 0, 6));
+    cJSON_AddStringToObject(note, "created_at", PQgetvalue(res, 0, 7));
+    cJSON_AddStringToObject(note, "updated_at", PQgetvalue(res, 0, 8));
+    if (!PQgetisnull(res, 0, 9))
+        cJSON_AddNumberToObject(note, "last_verified_ticket_id", atoi(PQgetvalue(res, 0, 9)));
+    if (!PQgetisnull(res, 0, 10))
+        cJSON_AddStringToObject(note, "last_verified_at", PQgetvalue(res, 0, 10));
+    snprintf(note_id_str, sizeof(note_id_str), "%d", atoi(PQgetvalue(res, 0, 0)));
+    PQclear(res);
+
+    const char *id_param[1] = {note_id_str};
+
+    /* Projects */
+    cJSON *projects = cJSON_CreateArray();
+    res = PQexecParams(ctx->db->conn,
+        "SELECT project_id FROM note_projects WHERE note_id = $1 ORDER BY project_id",
+        1, NULL, id_param, NULL, NULL, 0);
+    if (res && PQresultStatus(res) == PGRES_TUPLES_OK)
+        for (int i = 0; i < PQntuples(res); i++)
+            cJSON_AddItemToArray(projects, cJSON_CreateNumber(atoi(PQgetvalue(res, i, 0))));
+    if (res) PQclear(res);
+    cJSON_AddItemToObject(note, "project_ids", projects);
+
+    /* Link neighbourhood — metadata only, never neighbour bodies: the
+     * agent decides which link to follow (token economy). */
+    cJSON *links = cJSON_CreateArray();
+    res = PQexecParams(ctx->db->conn,
+        "SELECT 'outgoing', nl.link_type, n.id, n.slug, n.title, n.kind "
+        "  FROM note_links nl JOIN notes n ON n.id = nl.to_note_id "
+        " WHERE nl.from_note_id = $1 "
+        "UNION ALL "
+        "SELECT 'incoming', nl.link_type, n.id, n.slug, n.title, n.kind "
+        "  FROM note_links nl JOIN notes n ON n.id = nl.from_note_id "
+        " WHERE nl.to_note_id = $1 "
+        "ORDER BY 1, 2",
+        1, NULL, id_param, NULL, NULL, 0);
+    if (res && PQresultStatus(res) == PGRES_TUPLES_OK) {
+        for (int i = 0; i < PQntuples(res); i++) {
+            cJSON *l = cJSON_CreateObject();
+            cJSON_AddStringToObject(l, "direction", PQgetvalue(res, i, 0));
+            cJSON_AddStringToObject(l, "link_type", PQgetvalue(res, i, 1));
+            cJSON_AddNumberToObject(l, "note_id", atoi(PQgetvalue(res, i, 2)));
+            cJSON_AddStringToObject(l, "slug", PQgetvalue(res, i, 3));
+            cJSON_AddStringToObject(l, "title", PQgetvalue(res, i, 4));
+            cJSON_AddStringToObject(l, "kind", PQgetvalue(res, i, 5));
+            cJSON_AddItemToArray(links, l);
+        }
+    }
+    if (res) PQclear(res);
+    cJSON_AddItemToObject(note, "links", links);
+
+    /* Ticket links */
+    cJSON *tickets = cJSON_CreateArray();
+    res = PQexecParams(ctx->db->conn,
+        "SELECT ntl.ticket_id, ntl.relation, t.title "
+        "  FROM note_ticket_links ntl JOIN tickets t ON t.id = ntl.ticket_id "
+        " WHERE ntl.note_id = $1 ORDER BY ntl.ticket_id",
+        1, NULL, id_param, NULL, NULL, 0);
+    if (res && PQresultStatus(res) == PGRES_TUPLES_OK) {
+        for (int i = 0; i < PQntuples(res); i++) {
+            cJSON *t = cJSON_CreateObject();
+            cJSON_AddNumberToObject(t, "ticket_id", atoi(PQgetvalue(res, i, 0)));
+            cJSON_AddStringToObject(t, "relation", PQgetvalue(res, i, 1));
+            cJSON_AddStringToObject(t, "ticket_title", PQgetvalue(res, i, 2));
+            cJSON_AddItemToArray(tickets, t);
+        }
+    }
+    if (res) PQclear(res);
+    cJSON_AddItemToObject(note, "ticket_links", tickets);
+
+    return mcp_tool_ok(id, note);
+}
+
+static cJSON *tool_docs_list_notes(McpContext *ctx, cJSON *id, cJSON *params) {
+    int project_id = 0, limit = 0, offset = 0;
+    param_num(params, "project_id", &project_id);
+    param_num(params, "limit", &limit);
+    param_num(params, "offset", &offset);
+    const char *kind = param_str(params, "kind");
+    const char *tag  = param_str(params, "tag");
+    bool summary = param_bool(params, "summary", false);
+    bool include_archived = param_bool(params, "include_archived", false);
+
+    char proj_str[32], limit_str[32], offset_str[32];
+    snprintf(proj_str, sizeof(proj_str), "%d", project_id);
+    snprintf(limit_str, sizeof(limit_str), "%d", limit);
+    snprintf(offset_str, sizeof(offset_str), "%d", offset);
+
+    const char *q_params[6] = {
+        project_id > 0 ? proj_str : NULL,
+        kind, tag,
+        include_archived ? "t" : "f",
+        limit > 0 ? limit_str : NULL,
+        offset > 0 ? offset_str : NULL
+    };
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "SELECT id, slug, title, kind, tags::text, archived, "
+        "       length(body) AS body_chars, body, updated_at::text "
+        "FROM notes n "
+        "WHERE ($1::int IS NULL OR EXISTS (SELECT 1 FROM note_projects np "
+        "         WHERE np.note_id = n.id AND np.project_id = $1)) "
+        "  AND ($2::text IS NULL OR n.kind = $2) "
+        "  AND ($3::text IS NULL OR lower($3) = ANY(n.tags)) "
+        "  AND ($4::bool OR NOT n.archived) "
+        "ORDER BY n.updated_at DESC "
+        "LIMIT COALESCE($5::int, 100) OFFSET COALESCE($6::int, 0)",
+        6, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        const char *msg = docs_db_error(res);
+        if (res) PQclear(res);
+        return mcp_tool_err(id, msg ? msg : "Failed to list notes");
+    }
+
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < PQntuples(res); i++) {
+        cJSON *o = note_row_brief(res, i);
+        cJSON_AddNumberToObject(o, "body_chars", atoi(PQgetvalue(res, i, 6)));
+        if (!summary)
+            cJSON_AddStringToObject(o, "body", PQgetvalue(res, i, 7));
+        cJSON_AddStringToObject(o, "updated_at", PQgetvalue(res, i, 8));
+        cJSON_AddItemToArray(arr, o);
+    }
+    PQclear(res);
+    return mcp_tool_ok(id, arr);
+}
+
+
+/* ============================================================================
  * Registration
  * ============================================================================ */
 
@@ -456,4 +612,28 @@ void docs_register_tools(McpRegistry *r) {
     schema_num(s, "project_id", "Numeric project ID", true);
     mcp_registry_add(r, "kb.ai_docs_unassign_project",
         "Remove a note's assignment to a project", s, tool_docs_unassign_project);
+
+    s = schema_new();
+    schema_num(s, "note_id", "Numeric note ID (or use slug)", false);
+    schema_str(s, "slug",    "Note slug (alternative to note_id)", false);
+    mcp_registry_add(r, "kb.ai_docs_get_note",
+        "Get one note: full body, tags, projects, verification metadata, plus the link "
+        "neighbourhood as METADATA (linked notes with slug/title/link_type and linked "
+        "tickets — not their bodies). Follow a link with another get_note call; on a hub "
+        "note the 'contains' links ARE the table of contents.",
+        s, tool_docs_get_note);
+
+    s = schema_new();
+    schema_num(s, "project_id", "Filter by project (optional — omit to list across all projects)", false);
+    schema_str(s, "kind",       "Filter by kind: note, adr, or hub (optional). Tip: kind=hub lists the entry points.", false);
+    schema_str(s, "tag",        "Filter by tag (optional)", false);
+    schema_bool(s, "summary",   "If true, omit bodies — returns metadata plus body_chars only. Use for cheap overviews.", false);
+    schema_num(s, "limit",      "Max notes to return (optional, default 100)", false);
+    schema_num(s, "offset",     "Notes to skip for pagination (optional, default 0)", false);
+    schema_bool(s, "include_archived", "Include archived notes (default false)", false);
+    mcp_registry_add(r, "kb.ai_docs_list_notes",
+        "List notes ordered by last update. Every entry carries body_chars so you can "
+        "judge retrieval cost before calling get_note. Use summary:true + kind=hub to "
+        "discover entry points cheaply.",
+        s, tool_docs_list_notes);
 }
