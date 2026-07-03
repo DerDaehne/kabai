@@ -725,6 +725,109 @@ static cJSON *tool_docs_search(McpContext *ctx, cJSON *id, cJSON *params) {
 
 
 /* ============================================================================
+ * Suggestions (kbai-docs #327)
+ * ============================================================================ */
+
+/* Combines two signals: notes linked to related tickets (relations graph)
+ * and full-text matches of the ticket title against the note index. */
+static cJSON *tool_docs_suggest_for_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
+    int ticket_id;
+    if (!param_num(params, "ticket_id", &ticket_id))
+        return mcp_tool_err(id, "Missing required parameter: ticket_id");
+
+    char tid_str[32];
+    snprintf(tid_str, sizeof(tid_str), "%d", ticket_id);
+    const char *tid_param[1] = {tid_str};
+
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "SELECT title FROM tickets WHERE id = $1",
+        1, NULL, tid_param, NULL, NULL, 0);
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id, "Ticket not found");
+    }
+    PQclear(res);
+
+    cJSON *arr = cJSON_CreateArray();
+
+    /* Signal 1: notes linked to tickets related to this one. */
+    res = PQexecParams(ctx->db->conn,
+        "SELECT DISTINCT n.id, n.slug, n.title, n.kind, "
+        "       ntl.relation, other.id AS other_ticket "
+        "FROM ticket_relations tr "
+        "JOIN tickets other ON other.id = CASE WHEN tr.from_ticket_id = $1 "
+        "                                      THEN tr.to_ticket_id ELSE tr.from_ticket_id END "
+        "JOIN note_ticket_links ntl ON ntl.ticket_id = other.id "
+        "JOIN notes n ON n.id = ntl.note_id "
+        "WHERE (tr.from_ticket_id = $1 OR tr.to_ticket_id = $1) "
+        "  AND NOT n.archived "
+        "  AND NOT EXISTS (SELECT 1 FROM note_ticket_links own "
+        "                   WHERE own.note_id = n.id AND own.ticket_id = $1) "
+        "LIMIT 5",
+        1, NULL, tid_param, NULL, NULL, 0);
+    if (res && PQresultStatus(res) == PGRES_TUPLES_OK) {
+        for (int i = 0; i < PQntuples(res); i++) {
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddNumberToObject(o, "note_id", atoi(PQgetvalue(res, i, 0)));
+            cJSON_AddStringToObject(o, "slug", PQgetvalue(res, i, 1));
+            cJSON_AddStringToObject(o, "title", PQgetvalue(res, i, 2));
+            cJSON_AddStringToObject(o, "kind", PQgetvalue(res, i, 3));
+            char reason[128];
+            snprintf(reason, sizeof(reason), "linked (%s) to related ticket #%s",
+                     PQgetvalue(res, i, 4), PQgetvalue(res, i, 5));
+            cJSON_AddStringToObject(o, "reason", reason);
+            cJSON_AddItemToArray(arr, o);
+        }
+    }
+    if (res) PQclear(res);
+
+    /* Signal 2: FTS of the ticket title (OR over its lexemes; the rank
+     * threshold suppresses pseudo-hits from common words). */
+    res = PQexecParams(ctx->db->conn,
+        "WITH q AS ( "
+        "  SELECT to_tsquery('simple', string_agg(lexeme, ' | ')) AS query "
+        "  FROM unnest(tsvector_to_array(to_tsvector('simple', "
+        "         (SELECT title FROM tickets WHERE id = $1)))) lexeme "
+        "  WHERE length(lexeme) >= 4) "
+        "SELECT n.id, n.slug, n.title, n.kind, ts_rank(n.search_tsv, q.query)::text "
+        "FROM notes n, q "
+        "WHERE q.query IS NOT NULL AND n.search_tsv @@ q.query "
+        "  AND ts_rank(n.search_tsv, q.query) >= 0.05 "
+        "  AND NOT n.archived "
+        "  AND NOT EXISTS (SELECT 1 FROM note_ticket_links own "
+        "                   WHERE own.note_id = n.id AND own.ticket_id = $1) "
+        "ORDER BY ts_rank(n.search_tsv, q.query) DESC "
+        "LIMIT 5",
+        1, NULL, tid_param, NULL, NULL, 0);
+    if (res && PQresultStatus(res) == PGRES_TUPLES_OK) {
+        for (int i = 0; i < PQntuples(res); i++) {
+            int nid = atoi(PQgetvalue(res, i, 0));
+            int duplicate = 0;
+            cJSON *seen;
+            cJSON_ArrayForEach(seen, arr) {
+                cJSON *v = cJSON_GetObjectItemCaseSensitive(seen, "note_id");
+                if (cJSON_IsNumber(v) && (int)v->valueint == nid) { duplicate = 1; break; }
+            }
+            if (duplicate) continue;
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddNumberToObject(o, "note_id", nid);
+            cJSON_AddStringToObject(o, "slug", PQgetvalue(res, i, 1));
+            cJSON_AddStringToObject(o, "title", PQgetvalue(res, i, 2));
+            cJSON_AddStringToObject(o, "kind", PQgetvalue(res, i, 3));
+            char reason[96];
+            snprintf(reason, sizeof(reason), "matches ticket title terms (rank %.4s)",
+                     PQgetvalue(res, i, 4));
+            cJSON_AddStringToObject(o, "reason", reason);
+            cJSON_AddItemToArray(arr, o);
+        }
+    }
+    if (res) PQclear(res);
+
+    return mcp_tool_ok(id, arr);
+}
+
+
+/* ============================================================================
  * Registration
  * ============================================================================ */
 
@@ -886,4 +989,14 @@ void docs_register_tools(McpRegistry *r) {
         "when you read a note while working a ticket and confirmed it is still correct — "
         "old or missing verification tells later agents to double-check before trusting.",
         s, tool_docs_verify_note);
+
+    s = schema_new();
+    schema_num(s, "ticket_id", "Numeric ticket ID", true);
+    mcp_registry_add(r, "kb.ai_docs_suggest_for_ticket",
+        "Suggest knowledge-base notes likely relevant to a ticket, combining the relation "
+        "graph (notes linked to related tickets) with a full-text match of the ticket "
+        "title. Call it right after picking up a ticket; each suggestion states its "
+        "reason. Notes already linked to the ticket are omitted (see linked_notes in "
+        "kb.ai_get_ticket_detailed). An empty list means nothing relevant is documented yet.",
+        s, tool_docs_suggest_for_ticket);
 }
