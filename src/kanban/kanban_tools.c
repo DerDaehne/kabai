@@ -86,6 +86,17 @@ static cJSON *tool_create_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
                               param_str(params, "description"), type_val);
     if (!t) return mcp_tool_err(id, "Failed to create ticket");
 
+    bool docs_required = param_bool(params, "docs_required", false);
+    if (docs_required) {
+        char tid_str[32];
+        snprintf(tid_str, sizeof(tid_str), "%d", t->id);
+        const char *dp[1] = {tid_str};
+        PGresult *dres = PQexecParams(ctx->db->conn,
+            "UPDATE tickets SET docs_required = TRUE WHERE id = $1",
+            1, NULL, dp, NULL, NULL, 0);
+        if (dres) PQclear(dres);
+    }
+
     cJSON *r = cJSON_CreateObject();
     cJSON_AddNumberToObject(r, "id", t->id);
     cJSON_AddNumberToObject(r, "project_id", t->project_id);
@@ -94,6 +105,7 @@ static cJSON *tool_create_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     cJSON_AddStringToObject(r, "title", t->title);
     if (t->description) cJSON_AddStringToObject(r, "description", t->description);
     if (t->assignee)    cJSON_AddStringToObject(r, "assignee", t->assignee);
+    if (docs_required)  cJSON_AddBoolToObject(r, "docs_required", 1);
     ticket_free(t);
     return mcp_tool_ok(id, r);
 }
@@ -279,6 +291,14 @@ static cJSON *tool_get_ticket_detailed(McpContext *ctx, cJSON *id, cJSON *params
         char tid_str[32];
         snprintf(tid_str, sizeof(tid_str), "%d", d->ticket->id);
         const char *np[1] = {tid_str};
+
+        PGresult *dres = PQexecParams(ctx->db->conn,
+            "SELECT docs_required FROM tickets WHERE id = $1",
+            1, NULL, np, NULL, NULL, 0);
+        if (dres && PQresultStatus(dres) == PGRES_TUPLES_OK && PQntuples(dres) > 0 &&
+            PQgetvalue(dres, 0, 0)[0] == 't')
+            cJSON_AddBoolToObject(ticket_j, "docs_required", 1);
+        if (dres) PQclear(dres);
         PGresult *nres = PQexecParams(ctx->db->conn,
             "SELECT n.id, n.slug, n.title, n.kind, ntl.relation "
             "  FROM note_ticket_links ntl JOIN notes n ON n.id = ntl.note_id "
@@ -322,6 +342,11 @@ static cJSON *tool_move_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
             return mcp_tool_err(id, "Invalid ticket transition: check workflow rules");
         if (raw && strstr(raw, "Akzeptanzkriterium"))
             return mcp_tool_err(id, "Cannot close ticket: open acceptance criteria remain");
+        if (raw && strstr(raw, "Docs requirement"))
+            return mcp_tool_err(id,
+                "Cannot close ticket: docs_required is set but no knowledge-base note is "
+                "linked. Link one via kb.ai_docs_link_ticket or unset docs_required with "
+                "a justification (update_ticket + work-log comment)");
         return mcp_tool_err(id, "Failed to move ticket");
     }
 
@@ -359,6 +384,8 @@ static cJSON *tool_move_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
                 cJSON_AddStringToObject(entry, "error", "Invalid transition");
             else if (raw && strstr(raw, "Akzeptanzkriterium"))
                 cJSON_AddStringToObject(entry, "error", "Open acceptance criteria remain");
+            else if (raw && strstr(raw, "Docs requirement"))
+                cJSON_AddStringToObject(entry, "error", "docs_required set but no note linked");
             else
                 cJSON_AddStringToObject(entry, "error", "Failed");
             failed++;
@@ -413,8 +440,22 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         updated += ticket_update_description(ctx->db, ticket_id, new_desc);
     }
 
+    if (param_present(params, "docs_required")) {
+        char tid_str[32];
+        snprintf(tid_str, sizeof(tid_str), "%d", ticket_id);
+        const char *dp[2] = {tid_str,
+                             param_bool(params, "docs_required", false) ? "t" : "f"};
+        PGresult *dres = PQexecParams(ctx->db->conn,
+            "UPDATE tickets SET docs_required = $2::bool WHERE id = $1",
+            2, NULL, dp, NULL, NULL, 0);
+        if (dres && PQresultStatus(dres) == PGRES_COMMAND_OK &&
+            atoi(PQcmdTuples(dres)) > 0)
+            updated += 1;
+        if (dres) PQclear(dres);
+    }
+
     if (!updated)
-        return mcp_tool_err(id, "No updatable fields provided (title, description)");
+        return mcp_tool_err(id, "No updatable fields provided (title, description, docs_required)");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
@@ -705,6 +746,9 @@ void kanban_register_tools(McpRegistry *r) {
     schema_str(s, "title",       "Ticket title", true);
     schema_str(s, "description", "Optional detailed description", false);
     schema_str(s, "type",        "'ticket' (default) or 'epic'", false);
+    schema_bool(s, "docs_required",
+        "If true, the ticket cannot move to done without a linked knowledge-base note "
+        "(kb.ai_docs_link_ticket). Set it on architecturally relevant work.", false);
     mcp_registry_add(r, "kb.ai_create_ticket",
         "Create a new ticket or epic in a project. "
         "Use type='epic' for high-level goals that group child tickets via link_tickets(parent_of).",
@@ -781,8 +825,12 @@ void kanban_register_tools(McpRegistry *r) {
     schema_num(s, "ticket_id",   "Numeric ticket ID", true);
     schema_str(s, "title",       "New title (optional)", false);
     schema_str(s, "description", "New description, or null to clear (optional)", false);
+    schema_bool(s, "docs_required",
+        "Require a linked knowledge-base note before the ticket can close (optional). "
+        "When unsetting it, leave a work-log comment justifying why no docs are needed.",
+        false);
     mcp_registry_add(r, "kb.ai_update_ticket",
-        "Edit a ticket's title and/or description", s, tool_update_ticket);
+        "Edit a ticket's title, description, and/or docs_required flag", s, tool_update_ticket);
 
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
