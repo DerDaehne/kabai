@@ -51,4 +51,15 @@ cJSON *jsonrpc_error(cJSON *id, int code, const char *message);
 cJSON *mcp_tool_ok(cJSON *id, cJSON *data);
 cJSON *mcp_tool_err(cJSON *id, const char *message);
 
+typedef struct McpServerInfo {
+    const char *name;
+    const char *version;
+    const char *protocol_version;
+} McpServerInfo;
+
+/* Reads JSON-RPC requests line-by-line from stdin until EOF and answers
+ * initialize, notifications/initialized, tools/list and tools/call from
+ * the registry. */
+void mcp_run_stdio_loop(McpRegistry *r, McpContext *ctx, const McpServerInfo *info);
+
 #endif /* MCP_MCP_H */

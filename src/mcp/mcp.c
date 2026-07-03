@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "mcp/mcp.h"
@@ -149,4 +150,122 @@ cJSON *mcp_tool_err(cJSON *id, const char *message) {
     cJSON_AddBoolToObject(result, "isError", 1);
 
     return jsonrpc_result(id, result);
+}
+
+
+/* ============================================================================
+ * MCP Server: request handling + STDIO loop (JSON-RPC 2.0)
+ * ============================================================================ */
+
+static cJSON *handle_initialize(McpContext *ctx, const McpServerInfo *info, cJSON *id) {
+    cJSON *tools_cap = cJSON_CreateObject();
+
+    cJSON *caps = cJSON_CreateObject();
+    cJSON_AddItemToObject(caps, "tools", tools_cap);
+
+    cJSON *server_info = cJSON_CreateObject();
+    cJSON_AddStringToObject(server_info, "name", info->name);
+    cJSON_AddStringToObject(server_info, "version", info->version);
+    if (ctx->agent_name)  cJSON_AddStringToObject(server_info, "agentName",  ctx->agent_name);
+    if (ctx->agent_model) cJSON_AddStringToObject(server_info, "agentModel", ctx->agent_model);
+
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddStringToObject(result, "protocolVersion", info->protocol_version);
+    cJSON_AddItemToObject(result, "capabilities", caps);
+    cJSON_AddItemToObject(result, "serverInfo", server_info);
+
+    return jsonrpc_result(id, result);
+}
+
+static cJSON *handle_tools_list(McpRegistry *r, cJSON *id) {
+    cJSON *tools = cJSON_CreateArray();
+    mcp_registry_list_tools(r, tools);
+
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddItemToObject(result, "tools", tools);
+    return jsonrpc_result(id, result);
+}
+
+/* Returns the response, or NULL for notifications. */
+static cJSON *handle_request(McpRegistry *r, McpContext *ctx,
+                             const McpServerInfo *info, const char *json_str) {
+    cJSON *req = cJSON_Parse(json_str);
+    if (!req)
+        return jsonrpc_error(NULL, -32700, "Parse error");
+
+    cJSON *id_j = cJSON_GetObjectItemCaseSensitive(req, "id");  /* may be NULL for notifications */
+
+    cJSON *method_j = cJSON_GetObjectItemCaseSensitive(req, "method");
+    if (!method_j || !cJSON_IsString(method_j)) {
+        cJSON_Delete(req);
+        return jsonrpc_error(id_j, -32600, "Invalid Request: missing method");
+    }
+    const char *method = method_j->valuestring;
+    cJSON *params = cJSON_GetObjectItemCaseSensitive(req, "params");
+
+    cJSON *resp = NULL;
+
+    if (strcmp(method, "initialize") == 0) {
+        resp = handle_initialize(ctx, info, id_j);
+
+    } else if (strcmp(method, "notifications/initialized") == 0) {
+        /* Notification — no response required */
+        cJSON_Delete(req);
+        return NULL;
+
+    } else if (strcmp(method, "tools/list") == 0) {
+        resp = handle_tools_list(r, id_j);
+
+    } else if (strcmp(method, "tools/call") == 0) {
+        if (!params) {
+            resp = jsonrpc_error(id_j, -32602, "Invalid params: missing params for tools/call");
+        } else {
+            cJSON *name_j = cJSON_GetObjectItemCaseSensitive(params, "name");
+            cJSON *args_j = cJSON_GetObjectItemCaseSensitive(params, "arguments");
+
+            if (!name_j || !cJSON_IsString(name_j)) {
+                resp = jsonrpc_error(id_j, -32602, "Invalid params: missing tool name");
+            } else {
+                cJSON *tool_params = args_j ? cJSON_Duplicate(args_j, 1) : cJSON_CreateObject();
+                resp = mcp_registry_dispatch(r, ctx, id_j, name_j->valuestring, tool_params);
+                if (!resp) resp = mcp_tool_err(id_j, "Unknown tool");
+                cJSON_Delete(tool_params);
+            }
+        }
+
+    } else {
+        resp = jsonrpc_error(id_j, -32601, "Method not found");
+    }
+
+    cJSON_Delete(req);
+    return resp;
+}
+
+static void send_json(cJSON *json) {
+    char *str = cJSON_PrintUnformatted(json);
+    if (str) {
+        puts(str);
+        fflush(stdout);
+        cJSON_free(str);
+    }
+    cJSON_Delete(json);
+}
+
+void mcp_run_stdio_loop(McpRegistry *r, McpContext *ctx, const McpServerInfo *info) {
+    /* getline() grows the buffer automatically — no truncation risk */
+    char   *line     = NULL;
+    size_t  line_cap = 0;
+    ssize_t n;
+
+    while ((n = getline(&line, &line_cap, stdin)) != -1) {
+        /* Strip trailing newline */
+        if (n > 0 && line[n - 1] == '\n') line[--n] = '\0';
+        if (n > 0 && line[n - 1] == '\r') line[--n] = '\0';
+        if (n == 0) continue;
+
+        cJSON *resp = handle_request(r, ctx, info, line);
+        if (resp) send_json(resp);
+    }
+
+    free(line);
 }
