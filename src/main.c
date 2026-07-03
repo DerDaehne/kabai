@@ -13,10 +13,12 @@
 #include <string.h>
 #include <cjson/cJSON.h>
 #include "db/connection.h"
+#include "mcp/mcp.h"
 #include "kanban/projects.h"
 #include "kanban/tickets.h"
 #include "kanban/comments.h"
 #include "kanban/board_statuses.h"
+#include "kanban/kanban_tools.h"
 
 #define MCP_PROTOCOL_VERSION "2024-11-05"
 #define MCP_SERVER_VERSION   "0.5.0"
@@ -32,76 +34,11 @@ static DatabaseConnection *global_db    = NULL;
 static const char         *g_agent_name = NULL;
 static const char         *g_agent_model = NULL;
 
-
-/* ============================================================================
- * JSON-RPC 2.0 Protocol Helpers
- *
- * id is always borrowed (we duplicate it into the response).
- * result/error objects are always consumed (ownership transferred).
- * ============================================================================ */
-
-static cJSON *jsonrpc_result(cJSON *id, cJSON *result) {
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "jsonrpc", "2.0");
-    cJSON_AddItemToObject(resp, "id", id ? cJSON_Duplicate(id, 1) : cJSON_CreateNull());
-    cJSON_AddItemToObject(resp, "result", result);
-    return resp;
-}
-
-static cJSON *jsonrpc_error(cJSON *id, int code, const char *message) {
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "jsonrpc", "2.0");
-    cJSON_AddItemToObject(resp, "id", id ? cJSON_Duplicate(id, 1) : cJSON_CreateNull());
-    cJSON *err = cJSON_CreateObject();
-    cJSON_AddNumberToObject(err, "code", code);
-    cJSON_AddStringToObject(err, "message", message);
-    cJSON_AddItemToObject(resp, "error", err);
-    return resp;
-}
-
-
-/* ============================================================================
- * MCP Tool Result Helpers
- *
- * MCP wraps tool output in content blocks. Errors are signalled via isError,
- * not via the JSON-RPC error field (which is reserved for protocol errors).
- * ============================================================================ */
-
-/* Success: serialise data as JSON into a text content block. Consumes data. */
-static cJSON *mcp_tool_ok(cJSON *id, cJSON *data) {
-    char *text = cJSON_PrintUnformatted(data);
-    cJSON_Delete(data);
-
-    cJSON *item = cJSON_CreateObject();
-    cJSON_AddStringToObject(item, "type", "text");
-    cJSON_AddStringToObject(item, "text", text ? text : "{}");
-    if (text) cJSON_free(text);
-
-    cJSON *content = cJSON_CreateArray();
-    cJSON_AddItemToArray(content, item);
-
-    cJSON *result = cJSON_CreateObject();
-    cJSON_AddItemToObject(result, "content", content);
-    cJSON_AddBoolToObject(result, "isError", 0);
-
-    return jsonrpc_result(id, result);
-}
-
-/* Error: message in a text content block with isError:true. */
-static cJSON *mcp_tool_err(cJSON *id, const char *message) {
-    cJSON *item = cJSON_CreateObject();
-    cJSON_AddStringToObject(item, "type", "text");
-    cJSON_AddStringToObject(item, "text", message ? message : "Unknown error");
-
-    cJSON *content = cJSON_CreateArray();
-    cJSON_AddItemToArray(content, item);
-
-    cJSON *result = cJSON_CreateObject();
-    cJSON_AddItemToObject(result, "content", content);
-    cJSON_AddBoolToObject(result, "isError", 1);
-
-    return jsonrpc_result(id, result);
-}
+/* Framework registry + context. Tools are being migrated from the legacy
+ * dispatch below into module registrations (see kanban_register_tools);
+ * during the transition both paths coexist, registry first. */
+static McpRegistry *g_registry = NULL;
+static McpContext   g_ctx      = {0};
 
 
 /* ============================================================================
@@ -573,24 +510,6 @@ static cJSON *tool_list_projects(cJSON *id) {
     project_free_array(projects);
     return mcp_tool_ok(id, arr);
 }
-
-static cJSON *tool_get_project(cJSON *id, cJSON *params) {
-    cJSON *id_j = cJSON_GetObjectItemCaseSensitive(params, "project_id");
-    if (!cJSON_IsNumber(id_j))
-        return mcp_tool_err(id, "Missing required parameter: project_id");
-
-    Project *p = project_get_by_id(global_db, (int)id_j->valueint);
-    if (!p) return mcp_tool_err(id, "Project not found");
-
-    cJSON *r = cJSON_CreateObject();
-    cJSON_AddNumberToObject(r, "id", p->id);
-    cJSON_AddStringToObject(r, "slug", p->slug);
-    cJSON_AddStringToObject(r, "name", p->name);
-    if (p->description) cJSON_AddStringToObject(r, "description", p->description);
-    project_free(p);
-    return mcp_tool_ok(id, r);
-}
-
 
 /* ============================================================================
  * MCP Tools: Tickets
@@ -1101,9 +1020,12 @@ static cJSON *tool_move_tickets(cJSON *id, cJSON *params) {
  * ============================================================================ */
 
 static cJSON *dispatch_tool(cJSON *id, const char *name, cJSON *params) {
+    /* Framework path first; migrated tools live in the registry. */
+    cJSON *resp = mcp_registry_dispatch(g_registry, &g_ctx, id, name, params);
+    if (resp) return resp;
+
     if (strcmp(name, "kb.ai_create_project") == 0)     return tool_create_project(id, params);
     if (strcmp(name, "kb.ai_list_projects") == 0)       return tool_list_projects(id);
-    if (strcmp(name, "kb.ai_get_project") == 0)         return tool_get_project(id, params);
     if (strcmp(name, "kb.ai_create_ticket") == 0)       return tool_create_ticket(id, params);
     if (strcmp(name, "kb.ai_list_tickets") == 0)        return tool_list_tickets(id, params);
     if (strcmp(name, "kb.ai_search_tickets") == 0)      return tool_search_tickets(id, params);
@@ -1246,6 +1168,13 @@ int main(void) {
     if (!db_init())
         return EXIT_FAILURE;
 
+    g_ctx.db          = global_db;
+    g_ctx.agent_name  = g_agent_name;
+    g_ctx.agent_model = g_agent_model;
+
+    g_registry = mcp_registry_new();
+    kanban_register_tools(g_registry);
+
     fprintf(stderr, "kb.ai MCP Server %s (MCP protocol %s) ready\n",
             MCP_SERVER_VERSION, MCP_PROTOCOL_VERSION);
 
@@ -1265,6 +1194,7 @@ int main(void) {
     }
 
     free(line);
+    mcp_registry_free(g_registry);
     if (global_db) db_disconnect(global_db);
     fprintf(stderr, "kb.ai MCP Server shut down\n");
     return EXIT_SUCCESS;

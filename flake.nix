@@ -28,10 +28,13 @@
               src/main.c \
               src/db/connection.c \
               src/db/transaction.c \
+              src/mcp/mcp.c \
+              src/mcp/schema.c \
               src/kanban/projects.c \
               src/kanban/tickets.c \
               src/kanban/comments.c \
               src/kanban/board_statuses.c \
+              src/kanban/kanban_tools.c \
               -L${pkgs.postgresql.lib}/lib \
               -L${pkgs.cjson}/lib \
               -lpq -lcjson -lm
