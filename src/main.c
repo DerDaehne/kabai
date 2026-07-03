@@ -19,6 +19,7 @@
 #include "db/connection.h"
 #include "mcp/mcp.h"
 #include "kanban/kanban_tools.h"
+#include "docs/docs_tools.h"
 
 #define MCP_PROTOCOL_VERSION "2024-11-05"
 #define MCP_SERVER_VERSION   "0.5.0"
@@ -73,6 +74,7 @@ int main(void) {
 
     McpRegistry *registry = mcp_registry_new();
     kanban_register_tools(registry);
+    docs_register_tools(registry);
 
     McpServerInfo info = {
         .name             = MCP_SERVER_NAME,

@@ -35,6 +35,7 @@
               src/kanban/comments.c \
               src/kanban/board_statuses.c \
               src/kanban/kanban_tools.c \
+              src/docs/docs_tools.c \
               -L${pkgs.postgresql.lib}/lib \
               -L${pkgs.cjson}/lib \
               -lpq -lcjson -lm
