@@ -38,3 +38,4 @@ logs/
 # PostgreSQL data directory (local dev cluster)
 database/
 logfile
+kb_ai.sql
