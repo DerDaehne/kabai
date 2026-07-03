@@ -759,7 +759,7 @@ void kanban_register_tools(McpRegistry *r) {
     schema_str(s, "reason",
         "Required reason for deletion (e.g. 'duplicate of #42', 'created by mistake')", true);
     mcp_registry_add(r, "kb.ai_delete_ticket",
-        "Permanently delete a ticket (cascades tasks, comments, documents). "
+        "Permanently delete a ticket (cascades tasks, comments, relations, note links). "
         "Requires a non-empty reason. Use merge_into comment on the surviving ticket before deleting duplicates.",
         s, tool_delete_ticket);
 
