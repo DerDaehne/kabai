@@ -475,31 +475,38 @@ static cJSON *tool_docs_list_notes(McpContext *ctx, cJSON *id, cJSON *params) {
     const char *tag  = param_str(params, "tag");
     bool summary = param_bool(params, "summary", false);
     bool include_archived = param_bool(params, "include_archived", false);
+    int unverified_days = -1;
+    param_num(params, "unverified_since_days", &unverified_days);
 
-    char proj_str[32], limit_str[32], offset_str[32];
+    char proj_str[32], limit_str[32], offset_str[32], days_str[32];
     snprintf(proj_str, sizeof(proj_str), "%d", project_id);
     snprintf(limit_str, sizeof(limit_str), "%d", limit);
     snprintf(offset_str, sizeof(offset_str), "%d", offset);
+    snprintf(days_str, sizeof(days_str), "%d", unverified_days);
 
-    const char *q_params[6] = {
+    const char *q_params[7] = {
         project_id > 0 ? proj_str : NULL,
         kind, tag,
         include_archived ? "t" : "f",
         limit > 0 ? limit_str : NULL,
-        offset > 0 ? offset_str : NULL
+        offset > 0 ? offset_str : NULL,
+        unverified_days >= 0 ? days_str : NULL
     };
     PGresult *res = PQexecParams(ctx->db->conn,
         "SELECT id, slug, title, kind, tags::text, archived, "
-        "       length(body) AS body_chars, body, updated_at::text "
+        "       length(body) AS body_chars, body, updated_at::text, "
+        "       last_verified_at::text "
         "FROM notes n "
         "WHERE ($1::int IS NULL OR EXISTS (SELECT 1 FROM note_projects np "
         "         WHERE np.note_id = n.id AND np.project_id = $1)) "
         "  AND ($2::text IS NULL OR n.kind = $2) "
         "  AND ($3::text IS NULL OR lower($3) = ANY(n.tags)) "
         "  AND ($4::bool OR NOT n.archived) "
+        "  AND ($7::int IS NULL OR n.last_verified_at IS NULL "
+        "       OR n.last_verified_at < NOW() - make_interval(days => $7::int)) "
         "ORDER BY n.updated_at DESC "
         "LIMIT COALESCE($5::int, 100) OFFSET COALESCE($6::int, 0)",
-        6, NULL, q_params, NULL, NULL, 0);
+        7, NULL, q_params, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         const char *msg = docs_db_error(res);
@@ -514,10 +521,51 @@ static cJSON *tool_docs_list_notes(McpContext *ctx, cJSON *id, cJSON *params) {
         if (!summary)
             cJSON_AddStringToObject(o, "body", PQgetvalue(res, i, 7));
         cJSON_AddStringToObject(o, "updated_at", PQgetvalue(res, i, 8));
+        if (!PQgetisnull(res, i, 9))
+            cJSON_AddStringToObject(o, "last_verified_at", PQgetvalue(res, i, 9));
         cJSON_AddItemToArray(arr, o);
     }
     PQclear(res);
     return mcp_tool_ok(id, arr);
+}
+
+
+/* ============================================================================
+ * Verification metadata (kbai-docs #326)
+ * ============================================================================ */
+
+static cJSON *tool_docs_verify_note(McpContext *ctx, cJSON *id, cJSON *params) {
+    int note_id, ticket_id;
+    if (!param_num(params, "note_id", &note_id) ||
+        !param_num(params, "ticket_id", &ticket_id))
+        return mcp_tool_err(id, "Missing required parameters: note_id, ticket_id");
+
+    char note_str[32], ticket_str[32];
+    snprintf(note_str, sizeof(note_str), "%d", note_id);
+    snprintf(ticket_str, sizeof(ticket_str), "%d", ticket_id);
+    const char *q_params[2] = {note_str, ticket_str};
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "UPDATE notes SET last_verified_ticket_id = $2, last_verified_at = NOW() "
+        "WHERE id = $1 RETURNING slug, last_verified_at::text",
+        2, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        const char *msg = docs_db_error(res);
+        if (res) PQclear(res);
+        return mcp_tool_err(id, msg ? msg : "Failed to verify note");
+    }
+    if (PQntuples(res) == 0) {
+        PQclear(res);
+        return mcp_tool_err(id, "Note not found");
+    }
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "success", 1);
+    cJSON_AddStringToObject(r, "slug", PQgetvalue(res, 0, 0));
+    cJSON_AddNumberToObject(r, "last_verified_ticket_id", ticket_id);
+    cJSON_AddStringToObject(r, "last_verified_at", PQgetvalue(res, 0, 1));
+    PQclear(res);
+    return mcp_tool_ok(id, r);
 }
 
 
@@ -786,6 +834,9 @@ void docs_register_tools(McpRegistry *r) {
     schema_num(s, "limit",      "Max notes to return (optional, default 100)", false);
     schema_num(s, "offset",     "Notes to skip for pagination (optional, default 0)", false);
     schema_bool(s, "include_archived", "Include archived notes (default false)", false);
+    schema_num(s, "unverified_since_days",
+        "Only notes whose last verification is older than N days or missing — "
+        "use for staleness reviews (optional)", false);
     mcp_registry_add(r, "kb.ai_docs_list_notes",
         "List notes ordered by last update. Every entry carries body_chars so you can "
         "judge retrieval cost before calling get_note. Use summary:true + kind=hub to "
@@ -825,4 +876,14 @@ void docs_register_tools(McpRegistry *r) {
     schema_str(s, "relation",  "The relation to remove (must match exactly what was created)", true);
     mcp_registry_add(r, "kb.ai_docs_unlink_ticket",
         "Remove a note-ticket link", s, tool_docs_unlink_ticket);
+
+    s = schema_new();
+    schema_num(s, "note_id",   "Numeric note ID", true);
+    schema_num(s, "ticket_id", "Ticket in whose context you checked the note against the current code/system state", true);
+    mcp_registry_add(r, "kb.ai_docs_verify_note",
+        "Record that you checked a note against the current state and found it accurate "
+        "(sets last_verified_ticket_id/at, shown by get_note and list_notes). Call this "
+        "when you read a note while working a ticket and confirmed it is still correct — "
+        "old or missing verification tells later agents to double-check before trusting.",
+        s, tool_docs_verify_note);
 }
