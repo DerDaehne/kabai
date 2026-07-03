@@ -522,6 +522,103 @@ static cJSON *tool_docs_list_notes(McpContext *ctx, cJSON *id, cJSON *params) {
 
 
 /* ============================================================================
+ * Search (kbai-docs #323)
+ * ============================================================================ */
+
+/* Shared filter tail: $2 project, $3 kind, $4 tag, archived always hidden. */
+#define SEARCH_FILTERS \
+    "  AND NOT n.archived " \
+    "  AND ($2::int IS NULL OR EXISTS (SELECT 1 FROM note_projects np " \
+    "         WHERE np.note_id = n.id AND np.project_id = $2)) " \
+    "  AND ($3::text IS NULL OR n.kind = $3) " \
+    "  AND ($4::text IS NULL OR lower($4) = ANY(n.tags)) "
+
+static cJSON *search_rows_to_json(PGresult *res, const char *match_type) {
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < PQntuples(res); i++) {
+        cJSON *o = note_row_brief(res, i);
+        cJSON_AddNumberToObject(o, "rank", atof(PQgetvalue(res, i, 6)));
+        cJSON_AddStringToObject(o, "snippet", PQgetvalue(res, i, 7));
+        cJSON_AddNumberToObject(o, "body_chars", atoi(PQgetvalue(res, i, 8)));
+        cJSON_AddStringToObject(o, "match_type", match_type);
+        cJSON_AddItemToArray(arr, o);
+    }
+    return arr;
+}
+
+static cJSON *tool_docs_search(McpContext *ctx, cJSON *id, cJSON *params) {
+    const char *query = param_str(params, "query");
+    if (!query || query[0] == '\0')
+        return mcp_tool_err(id, "Missing required parameter: query");
+
+    int project_id = 0, limit = 0;
+    param_num(params, "project_id", &project_id);
+    param_num(params, "limit", &limit);
+    const char *kind = param_str(params, "kind");
+    const char *tag  = param_str(params, "tag");
+
+    char proj_str[32], limit_str[32];
+    snprintf(proj_str, sizeof(proj_str), "%d", project_id);
+    snprintf(limit_str, sizeof(limit_str), "%d", limit);
+    const char *q_params[5] = {
+        query,
+        project_id > 0 ? proj_str : NULL,
+        kind, tag,
+        limit > 0 ? limit_str : NULL
+    };
+
+    /* Primary: weighted full-text search ('simple' config, ADR D3). */
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "SELECT n.id, n.slug, n.title, n.kind, n.tags::text, n.archived, "
+        "       ts_rank(n.search_tsv, q)::text AS rank, "
+        "       ts_headline('simple', n.body, q, "
+        "                   'MaxWords=30, MinWords=10, MaxFragments=2') AS snippet, "
+        "       length(n.body) AS body_chars "
+        "FROM notes n, websearch_to_tsquery('simple', $1) q "
+        "WHERE n.search_tsv @@ q "
+        SEARCH_FILTERS
+        "ORDER BY ts_rank(n.search_tsv, q) DESC "
+        "LIMIT COALESCE($5::int, 20)",
+        5, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id, "Search failed (invalid query syntax?)");
+    }
+
+    if (PQntuples(res) > 0) {
+        cJSON *arr = search_rows_to_json(res, "fts");
+        PQclear(res);
+        return mcp_tool_ok(id, arr);
+    }
+    PQclear(res);
+
+    /* Fallback: trigram similarity on titles — catches typos and partial
+     * identifiers that FTS tokenisation misses. */
+    res = PQexecParams(ctx->db->conn,
+        "SELECT n.id, n.slug, n.title, n.kind, n.tags::text, n.archived, "
+        "       similarity(n.title, $1)::text AS rank, "
+        "       left(n.body, 160) AS snippet, "
+        "       length(n.body) AS body_chars "
+        "FROM notes n "
+        "WHERE n.title % $1 "
+        SEARCH_FILTERS
+        "ORDER BY similarity(n.title, $1) DESC "
+        "LIMIT COALESCE($5::int, 20)",
+        5, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id, "Search failed");
+    }
+
+    cJSON *arr = search_rows_to_json(res, "title_similarity");
+    PQclear(res);
+    return mcp_tool_ok(id, arr);
+}
+
+
+/* ============================================================================
  * Registration
  * ============================================================================ */
 
@@ -636,4 +733,17 @@ void docs_register_tools(McpRegistry *r) {
         "judge retrieval cost before calling get_note. Use summary:true + kind=hub to "
         "discover entry points cheaply.",
         s, tool_docs_list_notes);
+
+    s = schema_new();
+    schema_str(s, "query",      "Free-text search (words, phrases in quotes, -exclusions). Matches title, tags, and body.", true);
+    schema_num(s, "project_id", "Restrict to one project (optional — omit for a global search)", false);
+    schema_str(s, "kind",       "Filter by kind: note, adr, or hub (optional)", false);
+    schema_str(s, "tag",        "Filter by tag (optional)", false);
+    schema_num(s, "limit",      "Max results (optional, default 20)", false);
+    mcp_registry_add(r, "kb.ai_docs_search",
+        "Full-text search over the knowledge base. Returns ranked matches with a snippet, "
+        "match_type (fts, or title_similarity as typo-tolerant fallback) and body_chars "
+        "for judging retrieval cost. Use this BEFORE create_note to detect duplicates and "
+        "BEFORE reading code to check what is already documented.",
+        s, tool_docs_search);
 }
