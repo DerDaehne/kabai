@@ -711,6 +711,171 @@ static cJSON *tool_list_status_transitions(McpContext *ctx, cJSON *id, cJSON *pa
 
 
 /* ============================================================================
+ * Maintenance tools (Kanban AI #342, #343, #344)
+ * ============================================================================ */
+
+static cJSON *tool_update_board_status(McpContext *ctx, cJSON *id, cJSON *params) {
+    int status_id;
+    if (!param_num(params, "status_id", &status_id))
+        return mcp_tool_err(id, "Missing required parameter: status_id");
+
+    const char *disp = param_str(params, "display_name");
+    const char *ari  = param_str(params, "agent_role_instruction");
+    bool clear_ari   = param_is_null(params, "agent_role_instruction");
+    int position     = -1;
+    bool has_pos     = param_num(params, "position", &position);
+
+    if (!disp && !ari && !clear_ari && !has_pos)
+        return mcp_tool_err(id,
+            "No updatable fields provided (display_name, agent_role_instruction, position)");
+
+    char sid_str[32], pos_str[32];
+    snprintf(sid_str, sizeof(sid_str), "%d", status_id);
+    snprintf(pos_str, sizeof(pos_str), "%d", position);
+
+    const char *q_params[5] = {
+        sid_str, disp,
+        clear_ari ? NULL : ari,
+        clear_ari ? "t" : "f",
+        has_pos ? pos_str : NULL
+    };
+    /* name and special_type are stable keys — deliberately not editable. */
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "UPDATE board_statuses SET "
+        "  display_name = COALESCE($2, display_name), "
+        "  agent_role_instruction = CASE WHEN $4::bool THEN NULL "
+        "                                ELSE COALESCE($3, agent_role_instruction) END, "
+        "  position = COALESCE($5::int, position) "
+        "WHERE id = $1 RETURNING id, project_id, name, display_name, position",
+        5, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id, "Board status not found");
+    }
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddNumberToObject(r, "id", atoi(PQgetvalue(res, 0, 0)));
+    cJSON_AddNumberToObject(r, "project_id", atoi(PQgetvalue(res, 0, 1)));
+    cJSON_AddStringToObject(r, "name", PQgetvalue(res, 0, 2));
+    cJSON_AddStringToObject(r, "display_name", PQgetvalue(res, 0, 3));
+    cJSON_AddNumberToObject(r, "position", atoi(PQgetvalue(res, 0, 4)));
+    PQclear(res);
+    return mcp_tool_ok(id, r);
+}
+
+static cJSON *tool_update_project(McpContext *ctx, cJSON *id, cJSON *params) {
+    int project_id;
+    if (!param_num(params, "project_id", &project_id))
+        return mcp_tool_err(id, "Missing required parameter: project_id");
+
+    const char *name = param_str(params, "name");
+    const char *desc = param_str(params, "description");
+    bool clear_desc  = param_is_null(params, "description");
+
+    if (!name && !desc && !clear_desc)
+        return mcp_tool_err(id, "No updatable fields provided (name, description)");
+
+    char pid_str[32];
+    snprintf(pid_str, sizeof(pid_str), "%d", project_id);
+    const char *q_params[4] = {pid_str, name, clear_desc ? NULL : desc,
+                               clear_desc ? "t" : "f"};
+    /* slug is the stable key — deliberately not editable. */
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "UPDATE projects SET "
+        "  name = COALESCE($2, name), "
+        "  description = CASE WHEN $4::bool THEN NULL "
+        "                     ELSE COALESCE($3, description) END "
+        "WHERE id = $1 RETURNING id, slug, name, description",
+        4, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id, "Project not found");
+    }
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddNumberToObject(r, "id", atoi(PQgetvalue(res, 0, 0)));
+    cJSON_AddStringToObject(r, "slug", PQgetvalue(res, 0, 1));
+    cJSON_AddStringToObject(r, "name", PQgetvalue(res, 0, 2));
+    if (!PQgetisnull(res, 0, 3))
+        cJSON_AddStringToObject(r, "description", PQgetvalue(res, 0, 3));
+    PQclear(res);
+    return mcp_tool_ok(id, r);
+}
+
+static cJSON *tool_update_task(McpContext *ctx, cJSON *id, cJSON *params) {
+    int task_id;
+    const char *title = param_str(params, "title");
+    if (!param_num(params, "task_id", &task_id) || !title)
+        return mcp_tool_err(id, "Missing required parameters: task_id, title");
+
+    char tid_str[32];
+    snprintf(tid_str, sizeof(tid_str), "%d", task_id);
+    const char *q_params[2] = {tid_str, title};
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "UPDATE ticket_tasks SET title = $2 "
+        "WHERE id = $1 RETURNING id, ticket_id, title, is_completed",
+        2, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id, "Task not found");
+    }
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddNumberToObject(r, "id", atoi(PQgetvalue(res, 0, 0)));
+    cJSON_AddNumberToObject(r, "ticket_id", atoi(PQgetvalue(res, 0, 1)));
+    cJSON_AddStringToObject(r, "title", PQgetvalue(res, 0, 2));
+    cJSON_AddBoolToObject(r, "is_completed", PQgetvalue(res, 0, 3)[0] == 't');
+    PQclear(res);
+    return mcp_tool_ok(id, r);
+}
+
+static cJSON *tool_delete_task(McpContext *ctx, cJSON *id, cJSON *params) {
+    int task_id;
+    if (!param_num(params, "task_id", &task_id))
+        return mcp_tool_err(id, "Missing required parameter: task_id");
+    const char *reason = param_str(params, "reason");
+    if (!reason || reason[0] == '\0')
+        return mcp_tool_err(id, "Missing required parameter: reason (required for audit trail)");
+
+    char tid_str[32];
+    snprintf(tid_str, sizeof(tid_str), "%d", task_id);
+    const char *q_params[1] = {tid_str};
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "DELETE FROM ticket_tasks WHERE id = $1 RETURNING ticket_id, title",
+        1, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id, "Task not found");
+    }
+
+    int ticket_id = atoi(PQgetvalue(res, 0, 0));
+    char *task_title = strdup(PQgetvalue(res, 0, 1));
+    PQclear(res);
+
+    /* The deletion reason becomes part of the ticket's work log so the
+     * removed acceptance criterion stays auditable. */
+    const char *author = ctx->agent_name ? ctx->agent_name : "kb.ai";
+    char text[1024];
+    snprintf(text, sizeof(text),
+             "Acceptance criterion deleted: \"%s\" — reason: %s",
+             task_title ? task_title : "(unknown)", reason);
+    free(task_title);
+    TicketComment *c = comment_add(ctx->db, ticket_id, author, text);
+    if (c) comment_free(c);
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "success", 1);
+    cJSON_AddNumberToObject(r, "deleted_task_id", task_id);
+    cJSON_AddNumberToObject(r, "ticket_id", ticket_id);
+    return mcp_tool_ok(id, r);
+}
+
+
+/* ============================================================================
  * Registration
  *
  * Order matches the pre-framework tools/list output so the migration is
@@ -929,4 +1094,42 @@ void kanban_register_tools(McpRegistry *r) {
     mcp_registry_add(r, "kb.ai_list_status_transitions",
         "List all allowed workflow transitions for a project",
         s, tool_list_status_transitions);
+
+    /* ---- Maintenance ---- */
+
+    s = schema_new();
+    schema_num(s, "status_id",    "Numeric board status ID", true);
+    schema_str(s, "display_name", "New human-readable label (optional)", false);
+    schema_str(s, "agent_role_instruction",
+        "New persona prompt for this column, or null to clear (optional)", false);
+    schema_num(s, "position",     "New column order, 0-based (optional)", false);
+    mcp_registry_add(r, "kb.ai_update_board_status",
+        "Edit a board column: display_name, agent_role_instruction, position. "
+        "The machine name and special_type are stable keys and cannot be changed. "
+        "Use this to evolve a column's role instruction as the project changes.",
+        s, tool_update_board_status);
+
+    s = schema_new();
+    schema_num(s, "project_id",  "Numeric project ID", true);
+    schema_str(s, "name",        "New display name (optional)", false);
+    schema_str(s, "description", "New description, or null to clear (optional)", false);
+    mcp_registry_add(r, "kb.ai_update_project",
+        "Edit a project's name and/or description (the slug is permanent). "
+        "Keep descriptions current — they are the first context agents read via list_projects.",
+        s, tool_update_project);
+
+    s = schema_new();
+    schema_num(s, "task_id", "Numeric task ID (from get_ticket_detailed)", true);
+    schema_str(s, "title",   "Corrected task / acceptance criterion text", true);
+    mcp_registry_add(r, "kb.ai_update_task",
+        "Correct the title of an acceptance criterion task", s, tool_update_task);
+
+    s = schema_new();
+    schema_num(s, "task_id", "Numeric task ID (from get_ticket_detailed)", true);
+    schema_str(s, "reason",  "Required reason for removing the criterion (e.g. 'obsolete after scope change')", true);
+    mcp_registry_add(r, "kb.ai_delete_task",
+        "Delete an acceptance criterion task. The reason is recorded as a work-log "
+        "comment on the ticket so the removal stays auditable. Use for obsolete or "
+        "mistaken criteria — a deleted task no longer blocks the move to done.",
+        s, tool_delete_task);
 }
