@@ -39,3 +39,5 @@ logs/
 database/
 logfile
 kb_ai.sql
+kbai.dump
+*.dump
