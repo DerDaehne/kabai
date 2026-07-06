@@ -139,6 +139,11 @@ Relations may cross projects. Remove wrong links with
   description AND leave a comment about the change. Pass
   `description: null` to clear. When unsetting `docs_required`, justify it
   in a comment.
+- **Refining a rough ticket:** when you pick up a ticket whose description
+  is only a rough idea, your FIRST work step is `kb_ai_update_ticket` to
+  bring the description up to standard (scope, references, effort,
+  acceptance criteria). Comments and tasks do not replace the description —
+  it is what the next reader sees first.
 - `kb_ai_delete_ticket(ticket_id, reason)` — permanent, cascades tasks,
   comments, relations and note links. Only for mistakes and duplicates,
   never for "done but messy" tickets (that is what done is for). The

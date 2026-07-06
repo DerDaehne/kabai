@@ -33,7 +33,9 @@ the relevant one before your first kbai action in a session.
 1. **Search before create.** `kb_ai_search_tickets` first; comment on a
    near-duplicate instead of creating a twin.
 2. **Full descriptions.** Scope, references, effort estimate (XS–XL),
-   observable acceptance criteria. Title-only tickets are not workable.
+   observable acceptance criteria. Title-only tickets are not workable —
+   and when you pick up a rough ticket, refining its description via
+   `kb_ai_update_ticket` is your first work step.
 3. **Assign immediately.** `kb_ai_assign_ticket` right after creating or
    picking up a ticket. Never work unassigned tickets.
 4. **One task per acceptance criterion** (`kb_ai_add_task`);
