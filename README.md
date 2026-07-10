@@ -85,7 +85,10 @@ use the tools only partially. From a fresh system to a working setup:
    [skill/kbai/references/](skill/kbai/references/).
 
 The skill text is agent-neutral except for the SKILL.md frontmatter; other
-MCP-capable agents can use the same files as plain instructions.
+MCP-capable agents can use the same files as plain instructions — see
+[docs/MCP_USAGE.md](docs/MCP_USAGE.md) for per-client setup (Claude Code,
+Gemini CLI, Codex, generic MCP clients), including how to get the skill
+text into each agent's context.
 
 **Version coupling (maintainer process):** the skill documents the tool
 surface, so they must move together — any release that adds, removes, or

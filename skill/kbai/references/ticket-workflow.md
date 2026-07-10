@@ -1,9 +1,19 @@
 # kbai ticket workflow — binding rules
 
-Complete rules for the ticket half of the kb.ai MCP server. Tool names below
-use the client-normalised form (`kb_ai_*`); some clients show them as
-`kb.ai_*`. Every rule is imperative: MUST/NEVER rules are testable and a
-reviewer may reject your work for violating them.
+Complete rules for the ticket half of the kb.ai MCP server. Every rule is
+imperative: MUST/NEVER rules are testable and a reviewer may reject your
+work for violating them.
+
+## 0. Use the MCP tools — nothing else
+
+All ticket and board state lives in a PostgreSQL database that is reachable
+ONLY through the kb.ai MCP server's tools. You MUST NOT query the database
+directly (psql/SQL), and you MUST NOT search the filesystem or repo for
+ticket data — it is not there. Tool names below use the normalised form
+`kb_ai_*`; your client may expose them as `kb.ai_*` or with a server
+prefix (e.g. `kbai__kb_ai_*`). Match by name suffix against your own tool
+list. If nothing matches, the MCP server is not connected — report that
+instead of improvising another access path.
 
 ## 1. Session start protocol
 

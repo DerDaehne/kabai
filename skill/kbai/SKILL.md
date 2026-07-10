@@ -17,7 +17,34 @@ Mental model: **tickets are the record of work; notes are the record of
 knowledge.** Everything below is binding. Full rules with examples:
 [references/ticket-workflow.md](references/ticket-workflow.md) and
 [references/docs-zettelkasten.md](references/docs-zettelkasten.md) — read
-the relevant one before your first kbai action in a session.
+the relevant one before your first kbai action in a session. (If those
+relative links do not resolve in your environment, the two files live next
+to this one; they also work concatenated as plain instructions.)
+
+## Rule zero — the MCP tools are the ONLY interface
+
+The connected kb.ai MCP server provides every operation you need. You MUST
+do all board and knowledge-base work through its tools. NEVER bypass them:
+
+- NEVER query or modify the PostgreSQL database directly (no psql, no SQL,
+  no inspecting the schema to "help yourself").
+- NEVER search the filesystem, repo, or neighbouring directories for
+  tickets, board state, or knowledge notes — that data lives only in the
+  database behind the MCP server.
+- If a tool call fails or a tool seems missing, the correct reaction is to
+  resolve the tool name (next section) or report the MCP setup problem —
+  not to fall back to another access path.
+
+## Tool names vary by client
+
+This document writes tool names as `kb_ai_*`. The server registers them as
+`kb.ai_*`, and every MCP client exposes them slightly differently: some
+keep `kb.ai_list_projects`, some normalise to `kb_ai_list_projects`, some
+prefix the server alias (e.g. `kbai__kb_ai_list_projects` or
+`mcp__kbai__kb_ai_list_projects`). Resolve names by suffix: look through
+YOUR available tool list for the tool whose name ends in the name used
+here. If no tool matches, the MCP server is not connected — say so and
+stop; do not conclude the capability is missing and improvise.
 
 ## Session start (always)
 
@@ -83,7 +110,8 @@ the relevant one before your first kbai action in a session.
 
 ## Anti-patterns (reviewers reject these)
 
-Unassigned work · empty task lists · batch-completing tasks · skipping
-columns · stale descriptions · questions to humans without the
+Bypassing the MCP tools (direct SQL, grepping the filesystem for board
+data) · unassigned work · empty task lists · batch-completing tasks ·
+skipping columns · stale descriptions · questions to humans without the
 human_intervention move · knowledge only in comments · duplicate
 tickets/notes · orphan notes · editing ADRs instead of superseding them.

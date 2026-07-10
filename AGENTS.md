@@ -1,61 +1,64 @@
-# AI Agents Development Guide: `kb.ai` / ForgeKan
+# AI Agents Development Guide: `kb.ai`
 
-Welcome, Agent. This repository contains the core logic for `kb.ai`, a lightweight, database-driven Kanban/Project Board engine designed specifically for Agentic AI workflows. 
+This repository contains `kb.ai`, a database-driven kanban board plus
+zettelkasten knowledge base for agentic AI workflows, exposed as an MCP
+server written in C. Because the system is **database-driven**, the
+business logic, state machines, and constraints live directly inside
+PostgreSQL; the MCP layer stays lightweight, fast, and stateless.
 
-Your mission is to help develop, maintain, and expand this tool. Because the system is **Database-Driven**, the majority of the business logic, state machines, and constraints live directly inside PostgreSQL. This keeps the MCP (Model Context Protocol) server lightweight, fast, and secure.
+## Architecture overview
 
----
+1. **MCP server (the link):** a stateless stdio process (JSON-RPC 2.0)
+   that exposes database operations as MCP tools. One registry entry per
+   tool; the `src/kanban/` and `src/docs/` modules register themselves at
+   bootstrap. Design: [docs/MCP_FRAMEWORK_DESIGN.md](docs/MCP_FRAMEWORK_DESIGN.md).
+2. **PostgreSQL (the brain):** multi-project schema, per-project workflow
+   graphs, and rule enforcement via triggers — illegal moves, open
+   acceptance criteria at `done`, and missing note links on
+   `docs_required` tickets are rejected by the database itself.
+3. **Knowledge base (`src/docs/`):** atomic notes with typed links,
+   full-text search, and note↔ticket relations. Design:
+   [docs/adr/001-kbai-docs-postgres-zettelkasten.md](docs/adr/001-kbai-docs-postgres-zettelkasten.md).
 
-## Architecture Overview
+## Core schema concepts
 
-The system architecture minimizes the intelligence required by the MCP layer by utilizing PostgreSQL's native capabilities (Foreign Keys, Check Constraints, and Triggers):
+- **Projects & statuses** (`projects`, `board_statuses`): each project is
+  an isolated board with ordered columns. A column's
+  `agent_role_instruction` is a persona prompt: it tells the agent which
+  role to adopt (planner, implementer, reviewer, …) for tickets in that
+  column.
+- **Workflows** (`status_transitions`): a directed graph of allowed moves
+  per project. Moves outside the graph are rejected by a trigger.
+- **Tickets, tasks, comments** (`tickets`, `ticket_tasks`,
+  `ticket_comments`): tickets carry type (ticket/epic), assignee, model,
+  and `docs_required`; tasks are acceptance criteria (open tasks block
+  `done`); comments are the work log. Ticket relations (`parent_of`,
+  `blocks`, `duplicate_of`, `relates_to`) live in their own table.
+- **Notes** (`kbai_docs_*` tables, migration V7): the knowledge base —
+  atomic notes with permanent slugs, typed note↔note links
+  (references/contains/supersedes/contradicts), n:m project assignment,
+  and note↔ticket relations.
 
-1. **MCP Server (The Link):** A stateless, minimal translation layer that exposes database operations as standard MCP tools.
-2. **PostgreSQL (The Brain):** Houses the multi-project schema, handles the workflow graphs, enforces column rules, and blocks illegal state transitions using strict database triggers.
+## How to work in this repository
 
----
+**Follow the binding usage rules in [skill/kbai/](skill/kbai/).** They
+define the full workflow: session start protocol, duplicate checks,
+assignment, tasks per acceptance criterion, work-log comments, workflow
+moves, human-intervention escalation, and all knowledge-base conventions.
+Do not duplicate or improvise those rules here — `skill/kbai/SKILL.md` is
+the compact core, `skill/kbai/references/` the full chapters.
 
-## Core Schema Structure
+Repo-specific rules on top of the skill:
 
-The database supports **multiple boards/projects** simultaneously. Every project defines its own customized columns, workflow paths, and specific instructions per status.
-
-### 1. Projects & Statuses (`projects`, `board_statuses`)
-- A `project` acts as an isolated workspace (e.g., your robot game, a backend service, etc.).
-- Each project has multiple `board_statuses` (columns) ordered by `position`.
-- **`agent_role_instruction`:** This column contains a dynamic prompt injection. When you inspect a ticket, this field tells you exactly what role you must adopt (e.g., Coder, Architect, Reviewer) and how to act while the ticket is in this column.
-
-### 2. Workflows (`status_transitions`)
-- Defines a directed graph of allowed column movements per project.
-- If you attempt to update a ticket status through a path not defined here, the database will reject the operation with a SQL exception.
-
-### 3. Tickets, Tasks & Artifacts (`tickets`, `ticket_tasks`, `ticket_documents`, `ticket_comments`)
-- **Tickets:** Contain titles, descriptions, status tracking, and assignees (`assignee`).
-- **Tasks (Acceptance Criteria):** Actionable atomic subtasks. **Crucial rule:** A ticket cannot move to a status named `done` if there are any uncompleted tasks linked to it.
-- **Documents:** External references (Markdown specs, Codeberg URLs, design asset paths).
-- **Comments:** Collaboration logs for agent-to-agent or agent-to-human communication.
-
----
-
-## How You (The Agent) Should Work with this Repository
-
-When you are assigned to implement features or fix bugs within this codebase, always utilize the following multi-step workflow loops:
-
-### 1. The Alignment Loop (Planning Phase)
-- **Action:** Query the board to view open tickets.
-- **Context:** Fetch ticket details along with its current `agent_role_instruction`.
-- **Execution:** Adopt the requested persona immediately. Read any referenced files listed in `ticket_documents`.
-
-### 2. The Implementation Loop (Coding Phase)
-- **Action:** Assign the ticket to yourself by updating the `assignee` field.
-- **Execution:** Work on your local workspace files. Write tests and clean up implementations.
-- **Feedback:** As you clear checkpoints, mark individual subtasks (`ticket_tasks`) as completed.
-
-### 3. The Transition Loop (Handoff Phase)
-- **Action:** Attempt to move the ticket to the next status (e.g., from `in_progress` to `review`).
-- **Error Handling:** If PostgreSQL returns an error (e.g., *"Illegal Kanban-Move"* or *"Open acceptance criteria"*), do not ignore it. It means you missed a validation rule. Read the exception text, correct your work, complete the tasks, and try again.
-- **Communication:** Always document your changes by adding a professional, concise comment to the ticket before handing it off to the next agent or human.
-
----
-
-## Database Schema Inspections
-Before generating code or writing queries, make sure you conform strictly to the migration schemas specified in the `migrations/` directory. Never attempt to bypass database triggers; use the provided tool wrappers instead.
+- Development work on kb.ai itself is tracked in the kbai project
+  **"Kanban AI"** (and "kbai-docs" for the knowledge-base module) — use
+  the MCP tools, not raw SQL, for all board and note operations.
+- Conform strictly to the migration schemas in `migrations/` (V1..V8,
+  idempotent plain SQL). Never bypass database triggers; they ARE the
+  rule enforcement.
+- Builds use Nix flakes: `nix develop`, `nix build`, `nix build .#static`.
+- **Version coupling:** any change that adds, removes, or alters an MCP
+  tool MUST update `skill/kbai/` (and the README tool table) in the same
+  commit.
+- Client setup and skill installation for the common agents (Claude Code,
+  Gemini CLI, Codex) is documented in [docs/MCP_USAGE.md](docs/MCP_USAGE.md).

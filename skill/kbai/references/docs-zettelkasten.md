@@ -6,6 +6,16 @@ files. **Tickets are the record of work; notes are the record of
 knowledge.** Anything a future agent should know without replaying old
 tickets belongs in a note.
 
+## 0. Use the MCP tools — nothing else
+
+Notes live only in the database behind the kb.ai MCP server. You MUST NOT
+read or write them via direct SQL, and you MUST NOT grep the filesystem
+for knowledge-base content — it is not stored as files. Tool names here
+use the normalised form `kb_ai_docs_*`; your client may show `kb.ai_docs_*`
+or a server-prefixed variant (e.g. `kbai__kb_ai_docs_*`) — match by name
+suffix against your available tool list. No match means the MCP server is
+not connected: report it, do not improvise.
+
 ## 1. Search first — always
 
 Before creating a note, and before reading code to answer a "how does X
