@@ -1,6 +1,6 @@
 /*
  * MCP adapter for the docs module (kbai-docs zettelkasten): registers the
- * kb.ai_docs_* tools with the framework registry.
+ * kabai_docs_* tools with the framework registry.
  *
  * Design: docs/adr/001-kbai-docs-postgres-zettelkasten.md
  */

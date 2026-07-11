@@ -1,5 +1,5 @@
 /*
- * kb.ai MCP Server
+ * kabai MCP Server
  *
  * Implements the Model Context Protocol (MCP) over STDIO using JSON-RPC 2.0.
  * Exposes Kanban operations as MCP tools backed by a PostgreSQL database.
@@ -23,20 +23,20 @@
 
 #define MCP_PROTOCOL_VERSION "2024-11-05"
 #define MCP_SERVER_VERSION   "0.5.0"
-#define MCP_SERVER_NAME      "kb.ai"
+#define MCP_SERVER_NAME      "kabai"
 
 #define DEFAULT_DB_HOST     "localhost"
 #define DEFAULT_DB_PORT     "5432"
-#define DEFAULT_DB_NAME     "kb_ai"
+#define DEFAULT_DB_NAME     "kabai"
 #define DEFAULT_DB_USER     "postgres"
 #define DEFAULT_DB_PASSWORD ""
 
 static DatabaseConnection *db_init(void) {
-    const char *host     = getenv("KB_AI_DB_HOST");
-    const char *port     = getenv("KB_AI_DB_PORT");
-    const char *dbname   = getenv("KB_AI_DB_NAME");
-    const char *user     = getenv("KB_AI_DB_USER");
-    const char *password = getenv("KB_AI_DB_PASSWORD");
+    const char *host     = getenv("KABAI_DB_HOST");
+    const char *port     = getenv("KABAI_DB_PORT");
+    const char *dbname   = getenv("KABAI_DB_NAME");
+    const char *user     = getenv("KABAI_DB_USER");
+    const char *password = getenv("KABAI_DB_PASSWORD");
 
     DatabaseConnection *db = db_connect(
         host     ? host     : DEFAULT_DB_HOST,
@@ -47,11 +47,11 @@ static DatabaseConnection *db_init(void) {
     );
 
     if (!db) {
-        fprintf(stderr, "kb.ai: failed to connect to database\n");
+        fprintf(stderr, "kabai: failed to connect to database\n");
         return NULL;
     }
 
-    fprintf(stderr, "kb.ai: connected to %s:%s/%s\n",
+    fprintf(stderr, "kabai: connected to %s:%s/%s\n",
             host   ? host   : DEFAULT_DB_HOST,
             port   ? port   : DEFAULT_DB_PORT,
             dbname ? dbname : DEFAULT_DB_NAME);
@@ -68,8 +68,8 @@ int main(void) {
 
     McpContext ctx = {
         .db          = db,
-        .agent_name  = getenv("KB_AI_AGENT_NAME"),
-        .agent_model = getenv("KB_AI_AGENT_MODEL"),
+        .agent_name  = getenv("KABAI_AGENT_NAME"),
+        .agent_model = getenv("KABAI_AGENT_MODEL"),
     };
 
     McpRegistry *registry = mcp_registry_new();
@@ -82,13 +82,13 @@ int main(void) {
         .protocol_version = MCP_PROTOCOL_VERSION,
     };
 
-    fprintf(stderr, "kb.ai MCP Server %s (MCP protocol %s) ready\n",
+    fprintf(stderr, "kabai MCP Server %s (MCP protocol %s) ready\n",
             MCP_SERVER_VERSION, MCP_PROTOCOL_VERSION);
 
     mcp_run_stdio_loop(registry, &ctx, &info);
 
     mcp_registry_free(registry);
     db_disconnect(db);
-    fprintf(stderr, "kb.ai MCP Server shut down\n");
+    fprintf(stderr, "kabai MCP Server shut down\n");
     return EXIT_SUCCESS;
 }

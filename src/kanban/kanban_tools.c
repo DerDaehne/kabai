@@ -285,7 +285,7 @@ static cJSON *tool_get_ticket_detailed(McpContext *ctx, cJSON *id, cJSON *params
     }
 
     /* Linked knowledge-base notes (kbai-docs, note_ticket_links) — metadata
-     * only; fetch bodies via kb.ai_docs_get_note. */
+     * only; fetch bodies via kabai_docs_get_note. */
     cJSON *notes_arr = cJSON_CreateArray();
     {
         char tid_str[32];
@@ -345,7 +345,7 @@ static cJSON *tool_move_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         if (raw && strstr(raw, "Docs requirement"))
             return mcp_tool_err(id,
                 "Cannot close ticket: docs_required is set but no knowledge-base note is "
-                "linked. Link one via kb.ai_docs_link_ticket or unset docs_required with "
+                "linked. Link one via kabai_docs_link_ticket or unset docs_required with "
                 "a justification (update_ticket + work-log comment)");
         return mcp_tool_err(id, "Failed to move ticket");
     }
@@ -406,13 +406,13 @@ static cJSON *tool_assign_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     if (!param_num(params, "ticket_id", &ticket_id))
         return mcp_tool_err(id, "Missing required parameter: ticket_id");
 
-    /* Use provided assignee, fall back to KB_AI_AGENT_NAME, then error */
+    /* Use provided assignee, fall back to KABAI_AGENT_NAME, then error */
     const char *assignee = param_str(params, "assignee");
     if (!assignee) assignee = ctx->agent_name;
     if (!assignee)
         return mcp_tool_err(id,
-            "Missing assignee: provide 'assignee' parameter or set the KB_AI_AGENT_NAME "
-            "environment variable in the MCP server config (KB_AI_AGENT_MODEL is also "
+            "Missing assignee: provide 'assignee' parameter or set the KABAI_AGENT_NAME "
+            "environment variable in the MCP server config (KABAI_AGENT_MODEL is also "
             "recommended for tracking which model worked the ticket)");
 
     if (!ticket_assign(ctx->db, ticket_id, assignee, ctx->agent_model))
@@ -858,7 +858,7 @@ static cJSON *tool_delete_task(McpContext *ctx, cJSON *id, cJSON *params) {
 
     /* The deletion reason becomes part of the ticket's work log so the
      * removed acceptance criterion stays auditable. */
-    const char *author = ctx->agent_name ? ctx->agent_name : "kb.ai";
+    const char *author = ctx->agent_name ? ctx->agent_name : "kabai";
     char text[1024];
     snprintf(text, sizeof(text),
              "Acceptance criterion deleted: \"%s\" — reason: %s",
@@ -891,16 +891,16 @@ void kanban_register_tools(McpRegistry *r) {
     schema_str(s, "slug",        "Short unique identifier (e.g. 'robot-game')", true);
     schema_str(s, "name",        "Human-readable display name", true);
     schema_str(s, "description", "Optional project description", false);
-    mcp_registry_add(r, "kb.ai_create_project",
+    mcp_registry_add(r, "kabai_create_project",
         "Create a new project/board", s, tool_create_project);
 
     s = schema_new();
-    mcp_registry_add(r, "kb.ai_list_projects",
+    mcp_registry_add(r, "kabai_list_projects",
         "List all projects", s, tool_list_projects);
 
     s = schema_new();
     schema_num(s, "project_id", "Numeric project ID", true);
-    mcp_registry_add(r, "kb.ai_get_project",
+    mcp_registry_add(r, "kabai_get_project",
         "Get project details", s, tool_get_project);
 
     /* ---- Tickets ---- */
@@ -913,8 +913,8 @@ void kanban_register_tools(McpRegistry *r) {
     schema_str(s, "type",        "'ticket' (default) or 'epic'", false);
     schema_bool(s, "docs_required",
         "If true, the ticket cannot move to done without a linked knowledge-base note "
-        "(kb.ai_docs_link_ticket). Set it on architecturally relevant work.", false);
-    mcp_registry_add(r, "kb.ai_create_ticket",
+        "(kabai_docs_link_ticket). Set it on architecturally relevant work.", false);
+    mcp_registry_add(r, "kabai_create_ticket",
         "Create a new ticket or epic in a project. "
         "Use type='epic' for high-level goals that group child tickets via link_tickets(parent_of).",
         s, tool_create_ticket);
@@ -928,7 +928,7 @@ void kanban_register_tools(McpRegistry *r) {
     schema_bool(s, "summary",
         "If true, omit description fields — returns only id/status_id/title/assignee/timestamps. "
         "Use for an overview when descriptions are not needed.", false);
-    mcp_registry_add(r, "kb.ai_list_tickets",
+    mcp_registry_add(r, "kabai_list_tickets",
         "List tickets in a project. Supports status filter, pagination (limit/offset), "
         "and summary mode (omits description). Use summary:true + status_id for cheap overview calls.",
         s, tool_list_tickets);
@@ -936,14 +936,14 @@ void kanban_register_tools(McpRegistry *r) {
     s = schema_new();
     schema_num(s, "project_id", "ID of the project to search in", true);
     schema_str(s, "query",      "Search string matched case-insensitively against title and description", true);
-    mcp_registry_add(r, "kb.ai_search_tickets",
+    mcp_registry_add(r, "kabai_search_tickets",
         "Search tickets by title/description substring (ILIKE). Returns up to 50 matches. "
         "Use before create_ticket to detect duplicates.",
         s, tool_search_tickets);
 
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
-    mcp_registry_add(r, "kb.ai_get_ticket",
+    mcp_registry_add(r, "kabai_get_ticket",
         "Get basic ticket information including timestamps", s, tool_get_ticket);
 
     s = schema_new();
@@ -952,9 +952,9 @@ void kanban_register_tools(McpRegistry *r) {
         "Include agent_role_instruction in response (default true). "
         "Pass false after the first call to avoid repeating the same instruction for tickets in the same column.",
         false);
-    mcp_registry_add(r, "kb.ai_get_ticket_detailed",
+    mcp_registry_add(r, "kabai_get_ticket_detailed",
         "Get ticket with all tasks (acceptance criteria), work log, timestamps, and "
-        "linked knowledge-base notes (linked_notes — read them via kb.ai_docs_get_note "
+        "linked knowledge-base notes (linked_notes — read them via kabai_docs_get_note "
         "before starting work). Pass include_role_instruction:false on subsequent "
         "calls within the same session to avoid redundant context.",
         s, tool_get_ticket_detailed);
@@ -963,7 +963,7 @@ void kanban_register_tools(McpRegistry *r) {
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
     schema_num(s, "new_status_id",
         "Target column/status ID. Must be an allowed transition per workflow graph.", true);
-    mcp_registry_add(r, "kb.ai_move_ticket",
+    mcp_registry_add(r, "kabai_move_ticket",
         "Move a ticket to a new column. Rejected by the database if the transition "
         "is not in the workflow graph or if acceptance criteria are unmet.",
         s, tool_move_ticket);
@@ -971,7 +971,7 @@ void kanban_register_tools(McpRegistry *r) {
     s = schema_new();
     schema_num_array(s, "ticket_ids", "Array of ticket IDs to move", true);
     schema_num(s, "new_status_id", "Target status ID for all tickets", true);
-    mcp_registry_add(r, "kb.ai_move_tickets",
+    mcp_registry_add(r, "kabai_move_tickets",
         "Batch move multiple tickets to the same new status in one call. "
         "Returns per-ticket success/error breakdown.",
         s, tool_move_tickets);
@@ -979,11 +979,11 @@ void kanban_register_tools(McpRegistry *r) {
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
     schema_str(s, "assignee",
-        "Agent or user identifier. If omitted, falls back to KB_AI_AGENT_NAME env var.", false);
-    mcp_registry_add(r, "kb.ai_assign_ticket",
-        "Assign a ticket to an agent or user. Uses KB_AI_AGENT_NAME as default assignee "
-        "and always writes KB_AI_AGENT_MODEL to the model field. "
-        "Both KB_AI_AGENT_NAME and KB_AI_AGENT_MODEL must be set in the MCP server environment.",
+        "Agent or user identifier. If omitted, falls back to KABAI_AGENT_NAME env var.", false);
+    mcp_registry_add(r, "kabai_assign_ticket",
+        "Assign a ticket to an agent or user. Uses KABAI_AGENT_NAME as default assignee "
+        "and always writes KABAI_AGENT_MODEL to the model field. "
+        "Both KABAI_AGENT_NAME and KABAI_AGENT_MODEL must be set in the MCP server environment.",
         s, tool_assign_ticket);
 
     s = schema_new();
@@ -994,14 +994,14 @@ void kanban_register_tools(McpRegistry *r) {
         "Require a linked knowledge-base note before the ticket can close (optional). "
         "When unsetting it, leave a work-log comment justifying why no docs are needed.",
         false);
-    mcp_registry_add(r, "kb.ai_update_ticket",
+    mcp_registry_add(r, "kabai_update_ticket",
         "Edit a ticket's title, description, and/or docs_required flag", s, tool_update_ticket);
 
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
     schema_str(s, "reason",
         "Required reason for deletion (e.g. 'duplicate of #42', 'created by mistake')", true);
-    mcp_registry_add(r, "kb.ai_delete_ticket",
+    mcp_registry_add(r, "kabai_delete_ticket",
         "Permanently delete a ticket (cascades tasks, comments, relations, note links). "
         "Requires a non-empty reason. Use merge_into comment on the surviving ticket before deleting duplicates.",
         s, tool_delete_ticket);
@@ -1014,7 +1014,7 @@ void kanban_register_tools(McpRegistry *r) {
     schema_str(s, "relation_type",
         "One of: parent_of (epic→child), blocks (from blocks to), "
         "duplicate_of (from is duplicate of to), relates_to (generic)", true);
-    mcp_registry_add(r, "kb.ai_link_tickets",
+    mcp_registry_add(r, "kabai_link_tickets",
         "Create a directed relation between two tickets. "
         "Use parent_of to link an epic to its child tickets. "
         "Relations are visible in get_ticket_detailed as the 'relations' array.",
@@ -1025,7 +1025,7 @@ void kanban_register_tools(McpRegistry *r) {
     schema_num(s, "to_ticket_id",   "Target ticket ID", true);
     schema_str(s, "relation_type",
         "The relation to remove (must match exactly what was created)", true);
-    mcp_registry_add(r, "kb.ai_unlink_tickets",
+    mcp_registry_add(r, "kabai_unlink_tickets",
         "Remove a directed relation between two tickets", s, tool_unlink_tickets);
 
     /* ---- Tasks ---- */
@@ -1033,14 +1033,14 @@ void kanban_register_tools(McpRegistry *r) {
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
     schema_str(s, "title",     "Task / acceptance criterion description", true);
-    mcp_registry_add(r, "kb.ai_add_task",
+    mcp_registry_add(r, "kabai_add_task",
         "Add an acceptance criterion task to a ticket. "
         "All tasks must be completed before the ticket can be moved to 'done'.",
         s, tool_add_task);
 
     s = schema_new();
     schema_num(s, "task_id", "Numeric task ID (from get_ticket_detailed)", true);
-    mcp_registry_add(r, "kb.ai_complete_task",
+    mcp_registry_add(r, "kabai_complete_task",
         "Mark an acceptance criterion task as completed", s, tool_complete_task);
 
     /* ---- Comments / Work Log ---- */
@@ -1049,21 +1049,21 @@ void kanban_register_tools(McpRegistry *r) {
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
     schema_str(s, "author",    "Author identifier (e.g. 'claude-sonnet-4-6')", true);
     schema_str(s, "text",      "Comment / work log entry text", true);
-    mcp_registry_add(r, "kb.ai_add_comment",
+    mcp_registry_add(r, "kabai_add_comment",
         "Add a work log entry or comment to a ticket. "
         "Use this to document progress and hand-off notes.",
         s, tool_add_comment);
 
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
-    mcp_registry_add(r, "kb.ai_list_comments",
+    mcp_registry_add(r, "kabai_list_comments",
         "List all work log entries / comments for a ticket", s, tool_list_comments);
 
     /* ---- Board Statuses & Workflow ---- */
 
     s = schema_new();
     schema_num(s, "project_id", "Numeric project ID", true);
-    mcp_registry_add(r, "kb.ai_list_board_statuses",
+    mcp_registry_add(r, "kabai_list_board_statuses",
         "List all columns (board statuses) of a project including their "
         "agent_role_instruction. Call this first to discover status IDs and "
         "agent personas before creating tickets or setting up transitions.",
@@ -1077,21 +1077,21 @@ void kanban_register_tools(McpRegistry *r) {
     schema_str(s, "agent_role_instruction",
         "Dynamic persona prompt injected when an agent picks up a ticket in this column (optional)",
         false);
-    mcp_registry_add(r, "kb.ai_create_board_status",
+    mcp_registry_add(r, "kabai_create_board_status",
         "Create a new board column/status for a project", s, tool_create_board_status);
 
     s = schema_new();
     schema_num(s, "project_id",     "Numeric project ID", true);
     schema_num(s, "from_status_id", "Source column ID", true);
     schema_num(s, "to_status_id",   "Target column ID", true);
-    mcp_registry_add(r, "kb.ai_create_status_transition",
+    mcp_registry_add(r, "kabai_create_status_transition",
         "Define an allowed workflow transition between two columns. "
         "The database will reject moves not defined here.",
         s, tool_create_status_transition);
 
     s = schema_new();
     schema_num(s, "project_id", "Numeric project ID", true);
-    mcp_registry_add(r, "kb.ai_list_status_transitions",
+    mcp_registry_add(r, "kabai_list_status_transitions",
         "List all allowed workflow transitions for a project",
         s, tool_list_status_transitions);
 
@@ -1103,7 +1103,7 @@ void kanban_register_tools(McpRegistry *r) {
     schema_str(s, "agent_role_instruction",
         "New persona prompt for this column, or null to clear (optional)", false);
     schema_num(s, "position",     "New column order, 0-based (optional)", false);
-    mcp_registry_add(r, "kb.ai_update_board_status",
+    mcp_registry_add(r, "kabai_update_board_status",
         "Edit a board column: display_name, agent_role_instruction, position. "
         "The machine name and special_type are stable keys and cannot be changed. "
         "Use this to evolve a column's role instruction as the project changes.",
@@ -1113,7 +1113,7 @@ void kanban_register_tools(McpRegistry *r) {
     schema_num(s, "project_id",  "Numeric project ID", true);
     schema_str(s, "name",        "New display name (optional)", false);
     schema_str(s, "description", "New description, or null to clear (optional)", false);
-    mcp_registry_add(r, "kb.ai_update_project",
+    mcp_registry_add(r, "kabai_update_project",
         "Edit a project's name and/or description (the slug is permanent). "
         "Keep descriptions current — they are the first context agents read via list_projects.",
         s, tool_update_project);
@@ -1121,13 +1121,13 @@ void kanban_register_tools(McpRegistry *r) {
     s = schema_new();
     schema_num(s, "task_id", "Numeric task ID (from get_ticket_detailed)", true);
     schema_str(s, "title",   "Corrected task / acceptance criterion text", true);
-    mcp_registry_add(r, "kb.ai_update_task",
+    mcp_registry_add(r, "kabai_update_task",
         "Correct the title of an acceptance criterion task", s, tool_update_task);
 
     s = schema_new();
     schema_num(s, "task_id", "Numeric task ID (from get_ticket_detailed)", true);
     schema_str(s, "reason",  "Required reason for removing the criterion (e.g. 'obsolete after scope change')", true);
-    mcp_registry_add(r, "kb.ai_delete_task",
+    mcp_registry_add(r, "kabai_delete_task",
         "Delete an acceptance criterion task. The reason is recorded as a work-log "
         "comment on the ticket so the removal stays auditable. Use for obsolete or "
         "mistaken criteria — a deleted task no longer blocks the move to done.",

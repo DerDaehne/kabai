@@ -1,6 +1,6 @@
-# kbai knowledge base (zettelkasten) — binding rules
+# kabai knowledge base (zettelkasten) — binding rules
 
-The `kb_ai_docs_*` tools are the project's knowledge archive: atomic notes
+The `kabai_docs_*` tools are the project's knowledge archive: atomic notes
 in PostgreSQL, connected by typed links. It replaces grepping markdown
 files. **Tickets are the record of work; notes are the record of
 knowledge.** Anything a future agent should know without replaying old
@@ -8,11 +8,12 @@ tickets belongs in a note.
 
 ## 0. Use the MCP tools — nothing else
 
-Notes live only in the database behind the kb.ai MCP server. You MUST NOT
+Notes live only in the database behind the kabai MCP server. You MUST NOT
 read or write them via direct SQL, and you MUST NOT grep the filesystem
 for knowledge-base content — it is not stored as files. Tool names here
-use the normalised form `kb_ai_docs_*`; your client may show `kb.ai_docs_*`
-or a server-prefixed variant (e.g. `kbai__kb_ai_docs_*`) — match by name
+use the form `kabai_docs_*`, exactly as the server registers them; your
+client may show a server-prefixed variant (e.g. `kabai__kabai_docs_*`) —
+match by name
 suffix against your available tool list. No match means the MCP server is
 not connected: report it, do not improvise.
 
@@ -22,12 +23,12 @@ Before creating a note, and before reading code to answer a "how does X
 work" question:
 
 ```json
-kb_ai_docs_search {"query": "delta compression", "project_id": 4}
+kabai_docs_search {"query": "delta compression", "project_id": 4}
 ```
 
 - Hits are ranked, carry a snippet, `match_type` (`fts`, or
   `title_similarity` as typo-tolerant fallback) and `body_chars`.
-- If a note on the topic exists: **update it** (`kb_ai_docs_update_note`)
+- If a note on the topic exists: **update it** (`kabai_docs_update_note`)
   instead of creating a near-duplicate. NEVER create a second note for the
   same concept.
 - An empty result means the topic is genuinely undocumented — that is your
@@ -44,7 +45,7 @@ becomes one note per message type plus one hub.)
 ## 3. Creating notes
 
 ```json
-kb_ai_docs_create_note {
+kabai_docs_create_note {
   "slug": "concept-delta-compression",
   "title": "Delta compression of entity snapshots",
   "kind": "note",
@@ -63,13 +64,13 @@ kb_ai_docs_create_note {
   `hub` for an overview page; `note` for everything else. No other values
   exist.
 - **tags** — lowercase topic words for filtering (they are also
-  search-indexed). Reuse existing tags (`kb_ai_docs_list_notes` shows
+  search-indexed). Reuse existing tags (`kabai_docs_list_notes` shows
   them) instead of inventing synonyms.
 - **project_ids** — 0..n projects; the zettelkasten is global. Knowledge
   shared by several projects (process rules, shared infrastructure) gets
   several projects; truly global notes get none.
 
-## 4. Linking notes (`kb_ai_docs_link_notes`)
+## 4. Linking notes (`kabai_docs_link_notes`)
 
 Links ARE the structure — a note without links is invisible to navigation
 ("orphan"). After creating a note, link it:
@@ -81,13 +82,13 @@ Links ARE the structure — a note without links is invisible to navigation
 | `supersedes` | new decision replaces an old one: create the NEW note, link new → old, keep the old note (do not rewrite history). |
 | `contradicts` | you found two notes (or note vs. reality) in conflict and cannot resolve it now — mark it for review instead of ignoring it. |
 
-Wrong link? `kb_ai_docs_unlink_notes` with the exact same triple.
+Wrong link? `kabai_docs_unlink_notes` with the exact same triple.
 
-## 5. Linking tickets (`kb_ai_docs_link_ticket`)
+## 5. Linking tickets (`kabai_docs_link_ticket`)
 
 **Rule: every note you create or substantially change while working a
 ticket gets linked to that ticket.** That is how later agents find the
-knowledge from the ticket side (`kb_ai_get_ticket_detailed` returns
+knowledge from the ticket side (`kabai_get_ticket_detailed` returns
 `linked_notes`).
 
 | relation | Use |
@@ -99,9 +100,9 @@ knowledge from the ticket side (`kb_ai_get_ticket_detailed` returns
 
 ## 6. Hubs and discovery
 
-- Entry-point discovery: `kb_ai_docs_list_notes {"kind": "hub",
+- Entry-point discovery: `kabai_docs_list_notes {"kind": "hub",
   "summary": true}` — cheap, lists the tables of contents.
-- Navigation: `kb_ai_docs_get_note` on a hub returns its `contains` links
+- Navigation: `kabai_docs_get_note` on a hub returns its `contains` links
   as metadata (slug/title/kind, no bodies); follow with a second
   `get_note` for exactly the member you need. Two calls, no wasted
   context.
@@ -112,17 +113,17 @@ knowledge from the ticket side (`kb_ai_get_ticket_detailed` returns
 
 - **Verify:** when you read a note while working a ticket and confirmed it
   still matches the code/system, call
-  `kb_ai_docs_verify_note {"note_id": N, "ticket_id": T}`. Verification
+  `kabai_docs_verify_note {"note_id": N, "ticket_id": T}`. Verification
   age is shown everywhere; old or missing verification tells agents to
   double-check before trusting.
-- **Staleness review:** `kb_ai_docs_list_notes {"project_id": P,
+- **Staleness review:** `kabai_docs_list_notes {"project_id": P,
   "unverified_since_days": 30, "summary": true}` lists notes nobody has
   confirmed recently.
-- **Update:** `kb_ai_docs_update_note` changes only the fields you pass
+- **Update:** `kabai_docs_update_note` changes only the fields you pass
   (title/body/kind/tags). Always pass `ticket_id` — it records provenance.
   If the old content is *superseded* rather than corrected, write a new
   note plus a `supersedes` link instead (see §4).
-- **Archive:** `kb_ai_docs_archive_note {"note_id": N, "reason": "…"}` —
+- **Archive:** `kabai_docs_archive_note {"note_id": N, "reason": "…"}` —
   soft delete with mandatory reason; archived notes keep links and stay
   resolvable but leave search/listings. There is no hard delete. NEVER
   archive a note just because it is old — only when it is wrong or
@@ -135,7 +136,7 @@ architecturally relevant tickets — new subsystems, ADR-worthy decisions,
 schema changes). Such a ticket **cannot move to done** until a note is
 linked. When you finish one: write/update the note, `link_ticket`
 (`documents` or `created_by`), then move. If you believe no docs are
-needed after all, unset the flag via `kb_ai_update_ticket` and justify it
+needed after all, unset the flag via `kabai_update_ticket` and justify it
 in a work-log comment.
 
 ## 9. When to write a note — decision path
@@ -144,7 +145,7 @@ While working a ticket you learned or decided something. Walk this list:
 
 1. Will it matter after this ticket is closed? **No** → work-log comment
    on the ticket is enough. **Yes** → continue.
-2. `kb_ai_docs_search` for the concept. **Found?** → does your knowledge
+2. `kabai_docs_search` for the concept. **Found?** → does your knowledge
    correct or extend it? Update the note (with `ticket_id`), or create a
    new note + `supersedes` if the old approach is replaced. Then
    `verify_note` if you confirmed the rest still holds.
@@ -159,11 +160,11 @@ While working a ticket you learned or decided something. Walk this list:
 - Check `body_chars` (in search hits and listings) before `get_note` —
   you know the retrieval cost in advance.
 - `summary: true` for all overviews; paginate with limit/offset.
-- On ticket pickup, call `kb_ai_docs_suggest_for_ticket {"ticket_id": N}`:
+- On ticket pickup, call `kabai_docs_suggest_for_ticket {"ticket_id": N}`:
   it combines the ticket-relation graph with a full-text match and states
   a reason per suggestion. Also read the ticket's `linked_notes` from
-  `kb_ai_get_ticket_detailed`.
-- `kb_ai_docs_assign_project`/`unassign_project` fix project scoping when
+  `kabai_get_ticket_detailed`.
+- `kabai_docs_assign_project`/`unassign_project` fix project scoping when
   a note turns out to be relevant to more (or fewer) projects.
 
 ## 11. Anti-patterns

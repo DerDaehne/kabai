@@ -1,46 +1,46 @@
-# kbai ticket workflow — binding rules
+# kabai ticket workflow — binding rules
 
-Complete rules for the ticket half of the kb.ai MCP server. Every rule is
+Complete rules for the ticket half of the kabai MCP server. Every rule is
 imperative: MUST/NEVER rules are testable and a reviewer may reject your
 work for violating them.
 
 ## 0. Use the MCP tools — nothing else
 
 All ticket and board state lives in a PostgreSQL database that is reachable
-ONLY through the kb.ai MCP server's tools. You MUST NOT query the database
+ONLY through the kabai MCP server's tools. You MUST NOT query the database
 directly (psql/SQL), and you MUST NOT search the filesystem or repo for
-ticket data — it is not there. Tool names below use the normalised form
-`kb_ai_*`; your client may expose them as `kb.ai_*` or with a server
-prefix (e.g. `kbai__kb_ai_*`). Match by name suffix against your own tool
+ticket data — it is not there. Tool names below use the form `kabai_*`,
+exactly as the server registers them; your client may expose them with a
+server prefix (e.g. `kabai__kabai_*`). Match by name suffix against your own tool
 list. If nothing matches, the MCP server is not connected — report that
 instead of improvising another access path.
 
 ## 1. Session start protocol
 
-At the start of any session that touches kbai, in this order:
+At the start of any session that touches kabai, in this order:
 
-1. `kb_ai_list_projects` — find the project you work on; never guess IDs.
-2. `kb_ai_list_board_statuses(project_id)` — status IDs are **per project**.
+1. `kabai_list_projects` — find the project you work on; never guess IDs.
+2. `kabai_list_board_statuses(project_id)` — status IDs are **per project**.
    NEVER hardcode or reuse status IDs across projects; the same column name
    ("done") has a different ID everywhere.
 3. Read the `agent_role_instruction` of the column your ticket is in and
    **follow it** — it defines your role (e.g. architect vs. developer) and
    its definition of done. Columns without instruction carry no extra rules.
-4. `kb_ai_list_status_transitions(project_id)` — learn the workflow graph
+4. `kabai_list_status_transitions(project_id)` — learn the workflow graph
    before you move anything.
 
 Example:
 
 ```json
-kb_ai_list_board_statuses {"project_id": 4}
+kabai_list_board_statuses {"project_id": 4}
 ```
 
 ## 2. Creating tickets
 
-- **Duplicate check is mandatory.** Before every `kb_ai_create_ticket`, run
-  `kb_ai_search_tickets(project_id, query)` with 1–3 keyword variants
-  (and/or `kb_ai_list_tickets(project_id, summary: true)` for an overview).
-  If a near-duplicate exists: `kb_ai_add_comment` on the existing ticket
+- **Duplicate check is mandatory.** Before every `kabai_create_ticket`, run
+  `kabai_search_tickets(project_id, query)` with 1–3 keyword variants
+  (and/or `kabai_list_tickets(project_id, summary: true)` for an overview).
+  If a near-duplicate exists: `kabai_add_comment` on the existing ticket
   with your addition instead of creating a new one, or link the tickets
   with `relates_to`/`duplicate_of`. NEVER create a second ticket for the
   same work.
@@ -55,25 +55,25 @@ kb_ai_list_board_statuses {"project_id": 4}
   cannot move to done without a linked knowledge-base note — see the docs
   chapter.
 - **Assign immediately.** Directly after `create_ticket` (or after picking
-  up an existing ticket), call `kb_ai_assign_ticket(ticket_id)`. It records
+  up an existing ticket), call `kabai_assign_ticket(ticket_id)`. It records
   assignee and model from the server environment. NEVER work a ticket that
   is not assigned to you; NEVER leave your own new ticket unassigned if you
   are about to work it.
 
 ```json
-kb_ai_search_tickets {"project_id": 4, "query": "delta compression"}
-kb_ai_create_ticket {"project_id": 4, "status_id": 12, "title": "Compress entity snapshots",
+kabai_search_tickets {"project_id": 4, "query": "delta compression"}
+kabai_create_ticket {"project_id": 4, "status_id": 12, "title": "Compress entity snapshots",
   "description": "Scope: ... Out of scope: ... Refs: note delta-compression, #33.\nEffort: M\nAcceptance:\n- [criterion 1]\n- [criterion 2]",
   "docs_required": true}
-kb_ai_assign_ticket {"ticket_id": 123}
+kabai_assign_ticket {"ticket_id": 123}
 ```
 
 ## 3. Tasks = acceptance criteria
 
 - For every acceptance criterion in the description, add one
-  `kb_ai_add_task(ticket_id, title)`. An empty task list means the ticket
+  `kabai_add_task(ticket_id, title)`. An empty task list means the ticket
   cannot be verified — reviewers MUST treat it as not done.
-- Mark each task with `kb_ai_complete_task(task_id)` **immediately** when
+- Mark each task with `kabai_complete_task(task_id)` **immediately** when
   it is verifiably met. NEVER batch-complete all tasks right before closing:
   the task list is live progress state for other agents and humans.
 - The database refuses to move a ticket to `done` while open tasks remain.
@@ -82,7 +82,7 @@ kb_ai_assign_ticket {"ticket_id": 123}
 
 ## 4. Comments are the audit trail
 
-`kb_ai_add_comment(ticket_id, author, text)` at every significant event:
+`kabai_add_comment(ticket_id, author, text)` at every significant event:
 
 - **Pickup:** what you are about to do, in one or two sentences.
 - **Decisions:** what you chose and why (alternatives you rejected).
@@ -97,12 +97,12 @@ belongs in a knowledge-base note, not in a comment — see the docs chapter.
 
 ## 5. Moving tickets
 
-- Move only via `kb_ai_move_ticket(ticket_id, new_status_id)` and only
-  along edges returned by `kb_ai_list_status_transitions`. NEVER skip
+- Move only via `kabai_move_ticket(ticket_id, new_status_id)` and only
+  along edges returned by `kabai_list_status_transitions`. NEVER skip
   columns; the database rejects illegal transitions, but do not rely on
   trial and error — read the graph first.
 - On entering a column, read and follow its `agent_role_instruction`.
-- `kb_ai_move_tickets(ticket_ids, new_status_id)` is for genuine batch
+- `kabai_move_tickets(ticket_ids, new_status_id)` is for genuine batch
   operations (e.g. sweeping obsolete tickets); it returns a per-ticket
   success/error breakdown — check it.
 - A move to `done` is refused while open tasks remain, and — if
@@ -116,7 +116,7 @@ Columns with `special_type`:
 - `human_intervention`: escalation target, reachable from ANY column. When
   you are blocked on a decision only the human can make: write the question
   as a comment (full context, options, your recommendation), then
-  `kb_ai_move_ticket` into the human_intervention column. Then stop working
+  `kabai_move_ticket` into the human_intervention column. Then stop working
   that ticket.
 - `human_answered`: the human replied. Read the newest comments, continue
   the work, and move the ticket to the appropriate normal column (any
@@ -126,7 +126,7 @@ NEVER guess on decisions that are the project owner's to make; escalate.
 
 ## 7. Epics and relations
 
-`kb_ai_link_tickets(from_ticket_id, to_ticket_id, relation_type)`:
+`kabai_link_tickets(from_ticket_id, to_ticket_id, relation_type)`:
 
 - `parent_of` — epic → child. Create the epic (`type: "epic"`), then link
   each child. An epic is done only when every child is done or explicitly
@@ -136,47 +136,47 @@ NEVER guess on decisions that are the project owner's to make; escalate.
   tickets.
 - `duplicate_of` — mark the duplicate, keep the older/richer ticket, then
   add a merge comment on the survivor and delete the duplicate
-  (`kb_ai_delete_ticket` requires a reason, e.g. "duplicate of #42").
+  (`kabai_delete_ticket` requires a reason, e.g. "duplicate of #42").
 - `relates_to` — generic association when none of the above fits.
 
 Relations may cross projects. Remove wrong links with
-`kb_ai_unlink_tickets` (exact same triple).
+`kabai_unlink_tickets` (exact same triple).
 
 ## 8. Editing and deleting
 
-- `kb_ai_update_ticket(ticket_id, title?, description?, docs_required?)` —
+- `kabai_update_ticket(ticket_id, title?, description?, docs_required?)` —
   keep descriptions current: when scope changes mid-work, update the
   description AND leave a comment about the change. Pass
   `description: null` to clear. When unsetting `docs_required`, justify it
   in a comment.
 - **Refining a rough ticket:** when you pick up a ticket whose description
-  is only a rough idea, your FIRST work step is `kb_ai_update_ticket` to
+  is only a rough idea, your FIRST work step is `kabai_update_ticket` to
   bring the description up to standard (scope, references, effort,
   acceptance criteria). Comments and tasks do not replace the description —
   it is what the next reader sees first.
-- `kb_ai_delete_ticket(ticket_id, reason)` — permanent, cascades tasks,
+- `kabai_delete_ticket(ticket_id, reason)` — permanent, cascades tasks,
   comments, relations and note links. Only for mistakes and duplicates,
   never for "done but messy" tickets (that is what done is for). The
   reason is mandatory and becomes the audit trail.
 
 ## 9. Reading efficiently
 
-- Overviews: `kb_ai_list_tickets(project_id, summary: true, status_id?,
+- Overviews: `kabai_list_tickets(project_id, summary: true, status_id?,
   limit?, offset?)` — summary omits descriptions; paginate instead of
   fetching everything.
-- Single ticket: `kb_ai_get_ticket` for a quick look;
-  `kb_ai_get_ticket_detailed` only when you actually pick the ticket up —
+- Single ticket: `kabai_get_ticket` for a quick look;
+  `kabai_get_ticket_detailed` only when you actually pick the ticket up —
   it returns tasks, relations, comments AND `linked_notes` (read those
   notes before starting; see docs chapter). Pass
   `include_role_instruction: false` on repeat calls in the same session.
-- `kb_ai_get_project(project_id)` for one project's metadata instead of
+- `kabai_get_project(project_id)` for one project's metadata instead of
   listing all.
 
 ## 10. Board administration
 
-`kb_ai_create_project(slug, name, description)`,
-`kb_ai_create_board_status(project_id, name, display_name, position,
-agent_role_instruction?)` and `kb_ai_create_status_transition(project_id,
+`kabai_create_project(slug, name, description)`,
+`kabai_create_board_status(project_id, name, display_name, position,
+agent_role_instruction?)` and `kabai_create_status_transition(project_id,
 from_status_id, to_status_id)` set up new boards. Rules:
 
 - New projects automatically get human_intervention/human_answered columns.

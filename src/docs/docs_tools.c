@@ -849,11 +849,11 @@ void docs_register_tools(McpRegistry *r) {
         cJSON_AddItemToObject(cJSON_GetObjectItemCaseSensitive(s, "properties"), "tags", arr);
     }
     schema_num_array(s, "project_ids", "Projects this note belongs to (0..n — the zettelkasten is global, notes may span projects)", false);
-    mcp_registry_add(r, "kb.ai_docs_create_note",
+    mcp_registry_add(r, "kabai_docs_create_note",
         "Create an atomic note in the knowledge base (zettelkasten). "
-        "Search with kb.ai_docs_search FIRST to avoid duplicates. "
+        "Search with kabai_docs_search FIRST to avoid duplicates. "
         "Structure emerges from links, not hierarchy: connect the note to related notes "
-        "via kb.ai_docs_link_notes and to the originating ticket via kb.ai_docs_link_ticket.",
+        "via kabai_docs_link_notes and to the originating ticket via kabai_docs_link_ticket.",
         s, tool_docs_create_note);
 
     s = schema_new();
@@ -871,7 +871,7 @@ void docs_register_tools(McpRegistry *r) {
         cJSON_AddItemToObject(cJSON_GetObjectItemCaseSensitive(s, "properties"), "tags", arr);
     }
     schema_num(s, "ticket_id", "Ticket that caused this update (optional but recommended — provenance for the revision history)", false);
-    mcp_registry_add(r, "kb.ai_docs_update_note",
+    mcp_registry_add(r, "kabai_docs_update_note",
         "Update fields of a note. Unspecified fields keep their value; the slug is permanent. "
         "If the old content is superseded rather than corrected, consider a NEW note "
         "plus a 'supersedes' link instead of overwriting history.",
@@ -880,7 +880,7 @@ void docs_register_tools(McpRegistry *r) {
     s = schema_new();
     schema_num(s, "note_id", "Numeric note ID", true);
     schema_str(s, "reason",  "Required reason for archiving (audit trail — record it in your ticket's work log too)", true);
-    mcp_registry_add(r, "kb.ai_docs_archive_note",
+    mcp_registry_add(r, "kabai_docs_archive_note",
         "Archive (soft-delete) a note. Archived notes keep their links and stay resolvable "
         "but are excluded from search and listings by default. There is no hard delete: "
         "tickets may reference the note.",
@@ -892,7 +892,7 @@ void docs_register_tools(McpRegistry *r) {
     schema_str(s, "link_type",
         "One of: references (generic), contains (hub -> member, defines overview pages), "
         "supersedes (from replaces to), contradicts (marks a detected inconsistency for review)", true);
-    mcp_registry_add(r, "kb.ai_docs_link_notes",
+    mcp_registry_add(r, "kabai_docs_link_notes",
         "Create a directed, typed link between two notes. Links are the structure of the "
         "zettelkasten: hubs use 'contains' to define collections, ADR succession uses "
         "'supersedes', detected inconsistencies get 'contradicts'.",
@@ -902,13 +902,13 @@ void docs_register_tools(McpRegistry *r) {
     schema_num(s, "from_note_id", "Source note ID", true);
     schema_num(s, "to_note_id",   "Target note ID", true);
     schema_str(s, "link_type",    "The link to remove (must match exactly what was created)", true);
-    mcp_registry_add(r, "kb.ai_docs_unlink_notes",
+    mcp_registry_add(r, "kabai_docs_unlink_notes",
         "Remove a directed link between two notes", s, tool_docs_unlink_notes);
 
     s = schema_new();
     schema_num(s, "note_id",    "Numeric note ID", true);
     schema_num(s, "project_id", "Numeric project ID", true);
-    mcp_registry_add(r, "kb.ai_docs_assign_project",
+    mcp_registry_add(r, "kabai_docs_assign_project",
         "Assign a note to a project (n:m — a note may belong to several projects, "
         "e.g. process knowledge shared across teams). Idempotent.",
         s, tool_docs_assign_project);
@@ -916,13 +916,13 @@ void docs_register_tools(McpRegistry *r) {
     s = schema_new();
     schema_num(s, "note_id",    "Numeric note ID", true);
     schema_num(s, "project_id", "Numeric project ID", true);
-    mcp_registry_add(r, "kb.ai_docs_unassign_project",
+    mcp_registry_add(r, "kabai_docs_unassign_project",
         "Remove a note's assignment to a project", s, tool_docs_unassign_project);
 
     s = schema_new();
     schema_num(s, "note_id", "Numeric note ID (or use slug)", false);
     schema_str(s, "slug",    "Note slug (alternative to note_id)", false);
-    mcp_registry_add(r, "kb.ai_docs_get_note",
+    mcp_registry_add(r, "kabai_docs_get_note",
         "Get one note: full body, tags, projects, verification metadata, plus the link "
         "neighbourhood as METADATA (linked notes with slug/title/link_type and linked "
         "tickets — not their bodies). Follow a link with another get_note call; on a hub "
@@ -940,7 +940,7 @@ void docs_register_tools(McpRegistry *r) {
     schema_num(s, "unverified_since_days",
         "Only notes whose last verification is older than N days or missing — "
         "use for staleness reviews (optional)", false);
-    mcp_registry_add(r, "kb.ai_docs_list_notes",
+    mcp_registry_add(r, "kabai_docs_list_notes",
         "List notes ordered by last update. Every entry carries body_chars so you can "
         "judge retrieval cost before calling get_note. Use summary:true + kind=hub to "
         "discover entry points cheaply.",
@@ -952,7 +952,7 @@ void docs_register_tools(McpRegistry *r) {
     schema_str(s, "kind",       "Filter by kind: note, adr, or hub (optional)", false);
     schema_str(s, "tag",        "Filter by tag (optional)", false);
     schema_num(s, "limit",      "Max results (optional, default 20)", false);
-    mcp_registry_add(r, "kb.ai_docs_search",
+    mcp_registry_add(r, "kabai_docs_search",
         "Full-text search over the knowledge base. Returns ranked matches with a snippet, "
         "match_type (fts, or title_similarity as typo-tolerant fallback) and body_chars "
         "for judging retrieval cost. Use this BEFORE create_note to detect duplicates and "
@@ -966,9 +966,9 @@ void docs_register_tools(McpRegistry *r) {
         "One of: documents (note documents what the ticket built), created_by (ticket "
         "produced this note), verified_by (ticket confirmed the note is current), "
         "references (loose relation)", true);
-    mcp_registry_add(r, "kb.ai_docs_link_ticket",
+    mcp_registry_add(r, "kabai_docs_link_ticket",
         "Link a note to a ticket, structurally and queryable from both sides "
-        "(get_note shows ticket_links; kb.ai_get_ticket_detailed shows linked_notes). "
+        "(get_note shows ticket_links; kabai_get_ticket_detailed shows linked_notes). "
         "Link notes you create or update while working a ticket — that is how later "
         "agents find the relevant knowledge without grepping.",
         s, tool_docs_link_ticket);
@@ -977,13 +977,13 @@ void docs_register_tools(McpRegistry *r) {
     schema_num(s, "note_id",   "Numeric note ID", true);
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
     schema_str(s, "relation",  "The relation to remove (must match exactly what was created)", true);
-    mcp_registry_add(r, "kb.ai_docs_unlink_ticket",
+    mcp_registry_add(r, "kabai_docs_unlink_ticket",
         "Remove a note-ticket link", s, tool_docs_unlink_ticket);
 
     s = schema_new();
     schema_num(s, "note_id",   "Numeric note ID", true);
     schema_num(s, "ticket_id", "Ticket in whose context you checked the note against the current code/system state", true);
-    mcp_registry_add(r, "kb.ai_docs_verify_note",
+    mcp_registry_add(r, "kabai_docs_verify_note",
         "Record that you checked a note against the current state and found it accurate "
         "(sets last_verified_ticket_id/at, shown by get_note and list_notes). Call this "
         "when you read a note while working a ticket and confirmed it is still correct — "
@@ -992,11 +992,11 @@ void docs_register_tools(McpRegistry *r) {
 
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
-    mcp_registry_add(r, "kb.ai_docs_suggest_for_ticket",
+    mcp_registry_add(r, "kabai_docs_suggest_for_ticket",
         "Suggest knowledge-base notes likely relevant to a ticket, combining the relation "
         "graph (notes linked to related tickets) with a full-text match of the ticket "
         "title. Call it right after picking up a ticket; each suggestion states its "
         "reason. Notes already linked to the ticket are omitted (see linked_notes in "
-        "kb.ai_get_ticket_detailed). An empty list means nothing relevant is documented yet.",
+        "kabai_get_ticket_detailed). An empty list means nothing relevant is documented yet.",
         s, tool_docs_suggest_for_ticket);
 }

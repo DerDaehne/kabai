@@ -14,8 +14,8 @@
 
 typedef struct McpContext {
     DatabaseConnection *db;
-    const char         *agent_name;   /* KB_AI_AGENT_NAME, may be NULL */
-    const char         *agent_model;  /* KB_AI_AGENT_MODEL, may be NULL */
+    const char         *agent_name;   /* KABAI_AGENT_NAME, may be NULL */
+    const char         *agent_model;  /* KABAI_AGENT_MODEL, may be NULL */
 } McpContext;
 
 typedef cJSON *(*McpToolHandler)(McpContext *ctx, cJSON *id, cJSON *params);

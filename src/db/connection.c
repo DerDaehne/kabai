@@ -14,7 +14,7 @@ DatabaseConnection* db_connect(
         "host=%s port=%s dbname=%s user=%s password=%s",
         host ? host : "localhost",
         port ? port : "5432",
-        dbname ? dbname : "kb_ai",
+        dbname ? dbname : "kabai",
         user ? user : "postgres",
         password ? password : "");
     

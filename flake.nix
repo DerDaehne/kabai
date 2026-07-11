@@ -1,5 +1,5 @@
 {
-  description = "kb.ai - MCP Server for Database-Driven Kanban (PostgreSQL Backend)";
+  description = "kabai - MCP Server for Database-Driven Kanban (PostgreSQL Backend)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -13,7 +13,7 @@
       in
       {
         packages.default = pkgs.stdenv.mkDerivation {
-          name = "kbai";
+          name = "kabai";
           version = "0.5.0";
           src = ./.;
 
@@ -21,7 +21,7 @@
           buildInputs       = with pkgs; [ postgresql cjson ];
 
           buildPhase = ''
-            gcc -o kbai \
+            gcc -o kabai \
               -I./src \
               -I${pkgs.postgresql.dev}/include \
               -I${pkgs.cjson}/include \
@@ -43,13 +43,13 @@
 
           installPhase = ''
             mkdir -p $out/bin
-            cp kbai $out/bin/
+            cp kabai $out/bin/
           '';
         };
 
         apps.default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/kbai";
+          program = "${self.packages.${system}.default}/bin/kabai";
         };
 
         devShells.default = pkgs.mkShell {
@@ -62,7 +62,7 @@
           ];
 
           shellHook = ''
-            echo "kb.ai MCP Server Development Shell"
+            echo "kabai MCP Server Development Shell"
             echo "======================================"
             echo ""
             echo "Build commands:"
@@ -70,15 +70,15 @@
             echo "  nix run .   - Run MCP server"
             echo ""
             echo "Environment variables for DB connection:"
-            echo "  KB_AI_DB_HOST      (default: localhost)"
-            echo "  KB_AI_DB_PORT      (default: 5432)"
-            echo "  KB_AI_DB_NAME      (default: kb_ai)"
-            echo "  KB_AI_DB_USER      (default: postgres)"
-            echo "  KB_AI_DB_PASSWORD  (default: )"
+            echo "  KABAI_DB_HOST      (default: localhost)"
+            echo "  KABAI_DB_PORT      (default: 5432)"
+            echo "  KABAI_DB_NAME      (default: kabai)"
+            echo "  KABAI_DB_USER      (default: postgres)"
+            echo "  KABAI_DB_PASSWORD  (default: )"
             echo ""
             echo "Agent identity:"
-            echo "  KB_AI_AGENT_NAME   (default: none)"
-            echo "  KB_AI_AGENT_MODEL  (default: none)"
+            echo "  KABAI_AGENT_NAME   (default: none)"
+            echo "  KABAI_AGENT_MODEL  (default: none)"
             echo ""
             export CFLAGS="-I./src -I${pkgs.postgresql.dev}/include -I${pkgs.cjson}/include"
             export LDFLAGS="-L${pkgs.postgresql.lib}/lib -L${pkgs.cjson.lib}/lib -lpq -lcjson"
