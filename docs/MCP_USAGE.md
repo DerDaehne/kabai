@@ -12,7 +12,7 @@ install them alongside the server (see [Agent skill](#agent-skill-required-for-g
 ## Installation
 
 ```bash
-nix profile install codeberg:danszek/kb.ai
+nix profile install git+https://codeberg.org/danszek/kb.ai.git
 ```
 
 Or build from source:
@@ -25,28 +25,29 @@ nix build .#static    # statically linked release binary
 ```
 
 The resulting binary (`kabai`) speaks MCP over stdio: it reads JSON-RPC 2.0
-from stdin and writes responses to stdout. One process is spawned per
-session by the MCP client; there is no daemon.
+from stdin and writes responses to stdout. **There is no server process to
+run or keep running** — the agent's MCP client spawns one `kabai` process
+per session; the only long-running component is PostgreSQL.
 
 ## Database setup
 
-1. Ensure PostgreSQL 14+ is running.
-2. Create the database and apply **all** migrations in order:
+kabai expects a PostgreSQL (14+) database with the schema applied. The
+recommended way to set it up — and to get a human-friendly board view —
+is the sister project **[Kabai UI](https://codeberg.org/danszek/kbai-ui)**,
+which runs the schema migrations for you.
+
+Developers working on kabai itself can apply the plain-SQL migrations
+directly from this repo (`migrations/`, source of truth, idempotent,
+currently V1–V9):
 
 ```bash
 createdb kabai
-for f in migrations/V*.sql; do psql -U postgres -d kabai -f "$f"; done
+for f in migrations/V*.sql; do psql -d kabai -f "$f"; done
 ```
 
-Migrations are idempotent (`IF NOT EXISTS` style); re-running is safe.
-Current range: V1–V9 (kanban schema, ticket relations/epics,
-human-intervention statuses, knowledge-base notes, docs_required guard,
-kabai rename).
-
-3. Create projects, board columns, and workflow transitions via the MCP
-   tools (`kabai_create_project`, `kabai_create_board_status`,
-   `kabai_create_status_transition`) — or directly in SQL if you are
-   setting up as a human administrator.
+Projects, board columns, and workflow transitions are then created via the
+MCP tools (`kabai_create_project`, `kabai_create_board_status`,
+`kabai_create_status_transition`) or through Kabai UI.
 
 ## Environment variables
 
@@ -67,9 +68,10 @@ parameter on every call. Use one name per agent/client installation
 
 ## Client configuration
 
-The server command is the same everywhere: run the `kabai` binary (or
-`nix run codeberg:danszek/kb.ai`) with the environment variables above.
-Only the config file format differs per client.
+You never start `kabai` yourself: each client config below tells the
+agent's MCP client which command to spawn (the `kabai` binary) and which
+environment variables to hand it. Only the config file format differs per
+client.
 
 > **Tool names:** the server registers tools as `kabai_*`. Some clients
 > prefix the server alias (e.g. `kabai__kabai_list_projects`). Agents
@@ -106,7 +108,7 @@ mkdir -p ~/.claude/skills
 cp -r skill/kabai ~/.claude/skills/kabai
 ```
 
-### Gemini CLI
+### Gemini CLI / Antigravity
 
 MCP servers go into `~/.gemini/settings.json` (user) or
 `.gemini/settings.json` (project):
@@ -132,18 +134,26 @@ MCP servers go into `~/.gemini/settings.json` (user) or
 Verify with `/mcp` inside Gemini CLI — the server and its tools must be
 listed.
 
-Gemini has no skill mechanism; put the rules into the context file
-instead. Append the three skill files to your global or project
-`GEMINI.md`:
+Gemini CLI / Antigravity have a file-based skill system (no CLI installer).
+Copy the whole skill directory — `SKILL.md` plus `references/` — to one of
+these locations:
+
+| Scope | Path |
+|-------|------|
+| Global (Antigravity) | `~/.gemini/antigravity-cli/skills/kabai/SKILL.md` |
+| Shared | `~/.gemini/skills/kabai/SKILL.md` |
+| Workspace | `./.agents/skills/kabai/SKILL.md` |
 
 ```bash
-cat skill/kabai/SKILL.md \
-    skill/kabai/references/ticket-workflow.md \
-    skill/kabai/references/docs-zettelkasten.md >> ~/.gemini/GEMINI.md
+mkdir -p ~/.gemini/skills
+cp -r skill/kabai ~/.gemini/skills/kabai
 ```
 
-(The frontmatter block at the top of SKILL.md is Claude-specific metadata;
-it is harmless in a context file, but you can strip it.)
+Fallback for setups without skill support: append the three skill files to
+your global or project `GEMINI.md` (`cat skill/kabai/SKILL.md
+skill/kabai/references/*.md >> ~/.gemini/GEMINI.md`). The frontmatter block
+at the top of SKILL.md is skill metadata; it is harmless in a context
+file, but you can strip it.
 
 ### Codex CLI
 
