@@ -6,8 +6,8 @@ Status: accepted · 2026-07-03
 
 main.c (1271 lines) combined three places per tool that had to be kept in
 sync: handler function, `make_tool` entry with JSON schema in
-`handle_tools_list`, dispatch branch in `dispatch_tool`. With the kbai-docs
-module (project "kbai-docs", epic #329) adding ~10 more tools, the framework
+`handle_tools_list`, dispatch branch in `dispatch_tool`. With the kabai-docs
+module (project "kabai-docs", epic #329) adding ~10 more tools, the framework
 centralises the boilerplate so one tool is exactly ONE registry entry.
 
 ## Decisions
@@ -21,8 +21,8 @@ know every tool.
 ```c
 typedef struct McpContext {
     DatabaseConnection *db;
-    const char         *agent_name;   /* KB_AI_AGENT_NAME,  may be NULL */
-    const char         *agent_model;  /* KB_AI_AGENT_MODEL, may be NULL */
+    const char         *agent_name;   /* KABAI_AGENT_NAME,  may be NULL */
+    const char         *agent_model;  /* KABAI_AGENT_MODEL, may be NULL */
 } McpContext;
 
 typedef cJSON *(*McpToolHandler)(McpContext *ctx, cJSON *id, cJSON *params);
@@ -131,6 +131,6 @@ migration; spot-check calls per tool category.
 
 ## Bootstrapping note
 
-This doc is a transitional markdown file in the repo. Once kbai-docs is
-live (project "kbai-docs", #333), it gets imported as notes into the
-zettelkasten; kbai design docs are written there from then on.
+This doc is a transitional markdown file in the repo. Once kabai-docs is
+live (project "kabai-docs", #333), it gets imported as notes into the
+zettelkasten; kabai design docs are written there from then on.

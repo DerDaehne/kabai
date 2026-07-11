@@ -1,14 +1,14 @@
-# ADR 001: kbai-docs — Postgres zettelkasten as a docs module
+# ADR 001: kabai-docs — Postgres zettelkasten as a docs module
 
-Status: accepted · 2026-07-03 · Ticket: kbai-docs #330
+Status: accepted · 2026-07-03 · Ticket: kabai-docs #330
 
 ## Context
 
-kbai covers project management (tickets, roles, workflow). The second half
+kabai covers project management (tickets, roles, workflow). The second half
 of an agent's context — "what is already known about this system, and how
 does it relate to the current ticket" — used to run on raw markdown reading:
 expensive, blind (grep guessing), with no structural connection to tickets,
-and drift-prone (documented in epic kbai-docs #322).
+and drift-prone (documented in epic kabai-docs #322).
 
 ## Foundational decisions (project owner, 2026-07-03 — recorded here)
 
@@ -27,10 +27,10 @@ and drift-prone (documented in epic kbai-docs #322).
 4. **`kind` field without special logic** (note | adr | hub) plus free-form
    tags. No type-specific workflows in the MVP; ADR succession is a
    `supersedes` link.
-5. **One binary.** docs is a module `src/docs/` inside the kbai server,
+5. **One binary.** docs is a module `src/docs/` inside the kabai server,
    registered via the MCP framework (docs/MCP_FRAMEWORK_DESIGN.md,
    implemented in Kanban AI #335). Same DB → note_ticket_link uses real FKs.
-6. **Revision history later**, schema prepared for it (kbai-docs #339).
+6. **Revision history later**, schema prepared for it (kabai-docs #339).
 
 ## Detail decisions
 
@@ -77,32 +77,32 @@ benefit while tags are pure search/filter criteria.
 
 ### D5: Tool namespace
 
-Server-side prefix `kb.ai_docs_` (consistent with `kb.ai_...`; MCP clients
-normalise to `kb_ai_docs_...`). Planned tools:
+Server-side prefix `kabai_docs_` (consistent with `kabai_...`; MCP clients
+normalise to `kabai_docs_...`). Planned tools:
 
 | Tool | Ticket | Purpose |
 |------|--------|---------|
-| `kb.ai_docs_create_note(slug, title, kind, body, tags?, project_ids?)` | #332 | create a note |
-| `kb.ai_docs_update_note(note_id, title?, body?, kind?, tags?)` | #332 | targeted field updates |
-| `kb.ai_docs_archive_note(note_id, reason)` | #332 | soft delete |
-| `kb.ai_docs_link_notes(from_note_id, to_note_id, link_type)` / `unlink_notes` | #332 | note↔note |
-| `kb.ai_docs_assign_project(note_id, project_id)` / `unassign_project` | #332 | n:m project |
-| `kb.ai_docs_get_note(note_id \| slug)` | #324 | body + link neighbourhood (metadata) |
-| `kb.ai_docs_list_notes(project_id?, kind?, tag?, summary?, limit?, offset?)` | #324 | overview |
-| `kb.ai_docs_search(query, project_id?, kind?, tag?)` | #323 | FTS, hits carry body_chars |
-| `kb.ai_docs_link_ticket(note_id, ticket_id, relation)` / `unlink_ticket` | #325 | note↔ticket |
-| `kb.ai_docs_verify_note(note_id, ticket_id)` | #326 | stamp last_verified |
-| `kb.ai_docs_suggest_for_ticket(ticket_id)` | #327 | suggestions |
-| `kb.ai_docs_get_note_history(note_id)` | #339 | later (revisions) |
+| `kabai_docs_create_note(slug, title, kind, body, tags?, project_ids?)` | #332 | create a note |
+| `kabai_docs_update_note(note_id, title?, body?, kind?, tags?)` | #332 | targeted field updates |
+| `kabai_docs_archive_note(note_id, reason)` | #332 | soft delete |
+| `kabai_docs_link_notes(from_note_id, to_note_id, link_type)` / `unlink_notes` | #332 | note↔note |
+| `kabai_docs_assign_project(note_id, project_id)` / `unassign_project` | #332 | n:m project |
+| `kabai_docs_get_note(note_id \| slug)` | #324 | body + link neighbourhood (metadata) |
+| `kabai_docs_list_notes(project_id?, kind?, tag?, summary?, limit?, offset?)` | #324 | overview |
+| `kabai_docs_search(query, project_id?, kind?, tag?)` | #323 | FTS, hits carry body_chars |
+| `kabai_docs_link_ticket(note_id, ticket_id, relation)` / `unlink_ticket` | #325 | note↔ticket |
+| `kabai_docs_verify_note(note_id, ticket_id)` | #326 | stamp last_verified |
+| `kabai_docs_suggest_for_ticket(ticket_id)` | #327 | suggestions |
+| `kabai_docs_get_note_history(note_id)` | #339 | later (revisions) |
 
 note_ticket_link relations: `documents | created_by | verified_by |
 references` (CHECK constraint, mirroring D2).
 
 ### D6: Where this ADR lives (bootstrapping)
 
-Until kbai-docs is running: markdown under docs/adr/ in the kb.ai repo.
+Until kabai-docs is running: markdown under docs/adr/ in the kabai repo.
 After the legacy import (#333) this ADR becomes one of the first notes in
-the zettelkasten; from then on kbai design docs are written there directly.
+the zettelkasten; from then on kabai design docs are written there directly.
 
 ### D7 (additional finding): drop legacy tables
 
@@ -110,7 +110,7 @@ the zettelkasten; from then on kbai design docs are written there directly.
 note_ticket_link does properly) and `ticket_dependencies` (superseded by
 ticket_relations) are both empty and referenced by no code. The V7
 migration (#331) drops both so no second, dead "documents" concept exists
-next to kbai-docs.
+next to kabai-docs.
 
 ## Schema derivation for #331 (cross-check)
 
@@ -121,7 +121,7 @@ next to kbai-docs.
 | #325 ticket links | note_ticket_link (note_id FK, ticket_id FK, relation CHECK) |
 | #326 verification | note.last_verified_ticket_id FK, note.last_verified_at |
 | #327 suggestions | no new objects (uses #323 + #325) |
-| #328 docs guard | tickets.docs_required BOOL + check in the move path (kbai core) |
+| #328 docs guard | tickets.docs_required BOOL + check in the move path (kabai core) |
 | #339 revisions | note.updated_by_ticket_id now; note_revision + trigger later |
 | global n:m | note_project (note_id, project_id, PK on both) |
 

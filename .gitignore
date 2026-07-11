@@ -41,3 +41,7 @@ logfile
 kb_ai.sql
 kbai.dump
 *.dump
+
+# Legacy dumps (pre-rename)
+kabai.sql
+kabai.dump

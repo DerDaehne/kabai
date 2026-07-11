@@ -1,6 +1,6 @@
-# AI Agents Development Guide: `kb.ai`
+# AI Agents Development Guide: `kabai`
 
-This repository contains `kb.ai`, a database-driven kanban board plus
+This repository contains `kabai`, a database-driven kanban board plus
 zettelkasten knowledge base for agentic AI workflows, exposed as an MCP
 server written in C. Because the system is **database-driven**, the
 business logic, state machines, and constraints live directly inside
@@ -34,31 +34,31 @@ PostgreSQL; the MCP layer stays lightweight, fast, and stateless.
   and `docs_required`; tasks are acceptance criteria (open tasks block
   `done`); comments are the work log. Ticket relations (`parent_of`,
   `blocks`, `duplicate_of`, `relates_to`) live in their own table.
-- **Notes** (`kbai_docs_*` tables, migration V7): the knowledge base —
+- **Notes** (`notes`/`note_*` tables, migration V7): the knowledge base —
   atomic notes with permanent slugs, typed note↔note links
   (references/contains/supersedes/contradicts), n:m project assignment,
   and note↔ticket relations.
 
 ## How to work in this repository
 
-**Follow the binding usage rules in [skill/kbai/](skill/kbai/).** They
+**Follow the binding usage rules in [skill/kabai/](skill/kabai/).** They
 define the full workflow: session start protocol, duplicate checks,
 assignment, tasks per acceptance criterion, work-log comments, workflow
 moves, human-intervention escalation, and all knowledge-base conventions.
-Do not duplicate or improvise those rules here — `skill/kbai/SKILL.md` is
-the compact core, `skill/kbai/references/` the full chapters.
+Do not duplicate or improvise those rules here — `skill/kabai/SKILL.md` is
+the compact core, `skill/kabai/references/` the full chapters.
 
 Repo-specific rules on top of the skill:
 
-- Development work on kb.ai itself is tracked in the kbai project
-  **"Kanban AI"** (and "kbai-docs" for the knowledge-base module) — use
+- Development work on kabai itself is tracked in the kabai project
+  **"Kanban AI"** (and "kabai-docs" for the knowledge-base module) — use
   the MCP tools, not raw SQL, for all board and note operations.
-- Conform strictly to the migration schemas in `migrations/` (V1..V8,
+- Conform strictly to the migration schemas in `migrations/` (V1..V9,
   idempotent plain SQL). Never bypass database triggers; they ARE the
   rule enforcement.
 - Builds use Nix flakes: `nix develop`, `nix build`, `nix build .#static`.
 - **Version coupling:** any change that adds, removes, or alters an MCP
-  tool MUST update `skill/kbai/` (and the README tool table) in the same
+  tool MUST update `skill/kabai/` (and the README tool table) in the same
   commit.
 - Client setup and skill installation for the common agents (Claude Code,
   Gemini CLI, Codex) is documented in [docs/MCP_USAGE.md](docs/MCP_USAGE.md).

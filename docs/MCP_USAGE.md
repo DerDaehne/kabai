@@ -1,12 +1,12 @@
-# kb.ai MCP server — setup and usage
+# kabai MCP server — setup and usage
 
-`kb.ai` is an MCP (Model Context Protocol) server that exposes a kanban
+`kabai` is an MCP (Model Context Protocol) server that exposes a kanban
 board and a zettelkasten-style knowledge base as tools, backed by
 PostgreSQL. This document covers installation, database setup, environment
 variables, and per-client configuration for the most common AI agents.
 
 The **binding usage rules** for agents (workflow conventions, mandatory
-fields, knowledge-base linking) live in [`skill/kbai/`](../skill/kbai/) —
+fields, knowledge-base linking) live in [`skill/kabai/`](../skill/kabai/) —
 install them alongside the server (see [Agent skill](#agent-skill-required-for-good-results)).
 
 ## Installation
@@ -24,7 +24,7 @@ nix build             # dynamically linked
 nix build .#static    # statically linked release binary
 ```
 
-The resulting binary (`kbai`) speaks MCP over stdio: it reads JSON-RPC 2.0
+The resulting binary (`kabai`) speaks MCP over stdio: it reads JSON-RPC 2.0
 from stdin and writes responses to stdout. One process is spawned per
 session by the MCP client; there is no daemon.
 
@@ -34,46 +34,46 @@ session by the MCP client; there is no daemon.
 2. Create the database and apply **all** migrations in order:
 
 ```bash
-createdb kb_ai
-for f in migrations/V*.sql; do psql -U postgres -d kb_ai -f "$f"; done
+createdb kabai
+for f in migrations/V*.sql; do psql -U postgres -d kabai -f "$f"; done
 ```
 
 Migrations are idempotent (`IF NOT EXISTS` style); re-running is safe.
-Current range: V1–V8 (kanban schema, ticket relations/epics,
-human-intervention statuses, knowledge-base notes, docs_required guard).
+Current range: V1–V9 (kanban schema, ticket relations/epics,
+human-intervention statuses, knowledge-base notes, docs_required guard,
+kabai rename).
 
 3. Create projects, board columns, and workflow transitions via the MCP
-   tools (`kb.ai_create_project`, `kb.ai_create_board_status`,
-   `kb.ai_create_status_transition`) — or directly in SQL if you are
+   tools (`kabai_create_project`, `kabai_create_board_status`,
+   `kabai_create_status_transition`) — or directly in SQL if you are
    setting up as a human administrator.
 
 ## Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KB_AI_DB_HOST` | `localhost` | PostgreSQL host |
-| `KB_AI_DB_PORT` | `5432` | PostgreSQL port |
-| `KB_AI_DB_NAME` | `kb_ai` | Database name |
-| `KB_AI_DB_USER` | `postgres` | Database user |
-| `KB_AI_DB_PASSWORD` | *(empty)* | Database password |
-| `KB_AI_AGENT_NAME` | *(unset)* | Agent identity for `kb.ai_assign_ticket` — used as the default assignee |
-| `KB_AI_AGENT_MODEL` | *(unset)* | Model identifier — written to the ticket's `model` field on assignment |
+| `KABAI_DB_HOST` | `localhost` | PostgreSQL host |
+| `KABAI_DB_PORT` | `5432` | PostgreSQL port |
+| `KABAI_DB_NAME` | `kabai` | Database name |
+| `KABAI_DB_USER` | `postgres` | Database user |
+| `KABAI_DB_PASSWORD` | *(empty)* | Database password |
+| `KABAI_AGENT_NAME` | *(unset)* | Agent identity for `kabai_assign_ticket` — used as the default assignee |
+| `KABAI_AGENT_MODEL` | *(unset)* | Model identifier — written to the ticket's `model` field on assignment |
 
-**Set `KB_AI_AGENT_NAME` and `KB_AI_AGENT_MODEL`.** Without them,
-`kb.ai_assign_ticket` fails unless the agent passes an explicit `assignee`
+**Set `KABAI_AGENT_NAME` and `KABAI_AGENT_MODEL`.** Without them,
+`kabai_assign_ticket` fails unless the agent passes an explicit `assignee`
 parameter on every call. Use one name per agent/client installation
 (e.g. `claude-code-laptop`, `gemini-ci`).
 
 ## Client configuration
 
-The server command is the same everywhere: run the `kbai` binary (or
+The server command is the same everywhere: run the `kabai` binary (or
 `nix run codeberg:danszek/kb.ai`) with the environment variables above.
 Only the config file format differs per client.
 
-> **Tool names:** the server registers tools as `kb.ai_*`. Clients may
-> normalise the dot (`kb_ai_*`) and/or prefix the server alias
-> (e.g. `kbai__kb_ai_list_projects`). Agents should match tools by name
-> suffix; the skill text explains this to them.
+> **Tool names:** the server registers tools as `kabai_*`. Some clients
+> prefix the server alias (e.g. `kabai__kabai_list_projects`). Agents
+> should match tools by name suffix; the skill text explains this to them.
 
 ### Claude Code
 
@@ -83,27 +83,27 @@ Project-scoped, via `.mcp.json` in the repo root (or user-scoped with
 ```json
 {
   "mcpServers": {
-    "kbai": {
-      "command": "/path/to/kbai",
+    "kabai": {
+      "command": "/path/to/kabai",
       "env": {
-        "KB_AI_DB_HOST": "localhost",
-        "KB_AI_DB_NAME": "kb_ai",
-        "KB_AI_DB_USER": "postgres",
-        "KB_AI_DB_PASSWORD": "secret",
-        "KB_AI_AGENT_NAME": "my-agent",
-        "KB_AI_AGENT_MODEL": "claude-sonnet-5"
+        "KABAI_DB_HOST": "localhost",
+        "KABAI_DB_NAME": "kabai",
+        "KABAI_DB_USER": "postgres",
+        "KABAI_DB_PASSWORD": "secret",
+        "KABAI_AGENT_NAME": "my-agent",
+        "KABAI_AGENT_MODEL": "claude-sonnet-5"
       }
     }
   }
 }
 ```
 
-Skill install (teaches the binding conventions, auto-triggers on kbai
+Skill install (teaches the binding conventions, auto-triggers on kabai
 work):
 
 ```bash
 mkdir -p ~/.claude/skills
-cp -r skill/kbai ~/.claude/skills/kbai
+cp -r skill/kabai ~/.claude/skills/kabai
 ```
 
 ### Gemini CLI
@@ -114,15 +114,15 @@ MCP servers go into `~/.gemini/settings.json` (user) or
 ```json
 {
   "mcpServers": {
-    "kbai": {
-      "command": "/path/to/kbai",
+    "kabai": {
+      "command": "/path/to/kabai",
       "env": {
-        "KB_AI_DB_HOST": "localhost",
-        "KB_AI_DB_NAME": "kb_ai",
-        "KB_AI_DB_USER": "postgres",
-        "KB_AI_DB_PASSWORD": "secret",
-        "KB_AI_AGENT_NAME": "my-gemini-agent",
-        "KB_AI_AGENT_MODEL": "gemini-2.5-pro"
+        "KABAI_DB_HOST": "localhost",
+        "KABAI_DB_NAME": "kabai",
+        "KABAI_DB_USER": "postgres",
+        "KABAI_DB_PASSWORD": "secret",
+        "KABAI_AGENT_NAME": "my-gemini-agent",
+        "KABAI_AGENT_MODEL": "gemini-2.5-pro"
       }
     }
   }
@@ -137,9 +137,9 @@ instead. Append the three skill files to your global or project
 `GEMINI.md`:
 
 ```bash
-cat skill/kbai/SKILL.md \
-    skill/kbai/references/ticket-workflow.md \
-    skill/kbai/references/docs-zettelkasten.md >> ~/.gemini/GEMINI.md
+cat skill/kabai/SKILL.md \
+    skill/kabai/references/ticket-workflow.md \
+    skill/kabai/references/docs-zettelkasten.md >> ~/.gemini/GEMINI.md
 ```
 
 (The frontmatter block at the top of SKILL.md is Claude-specific metadata;
@@ -150,32 +150,32 @@ it is harmless in a context file, but you can strip it.)
 MCP servers are configured in `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.kbai]
-command = "/path/to/kbai"
+[mcp_servers.kabai]
+command = "/path/to/kabai"
 
-[mcp_servers.kbai.env]
-KB_AI_DB_HOST = "localhost"
-KB_AI_DB_NAME = "kb_ai"
-KB_AI_DB_USER = "postgres"
-KB_AI_DB_PASSWORD = "secret"
-KB_AI_AGENT_NAME = "my-codex-agent"
-KB_AI_AGENT_MODEL = "gpt-5"
+[mcp_servers.kabai.env]
+KABAI_DB_HOST = "localhost"
+KABAI_DB_NAME = "kabai"
+KABAI_DB_USER = "postgres"
+KABAI_DB_PASSWORD = "secret"
+KABAI_AGENT_NAME = "my-codex-agent"
+KABAI_AGENT_MODEL = "gpt-5"
 ```
 
 Codex reads `AGENTS.md` as its instruction file. Append the skill files to
 your global `~/.codex/AGENTS.md` or the project `AGENTS.md`:
 
 ```bash
-cat skill/kbai/SKILL.md \
-    skill/kbai/references/ticket-workflow.md \
-    skill/kbai/references/docs-zettelkasten.md >> ~/.codex/AGENTS.md
+cat skill/kabai/SKILL.md \
+    skill/kabai/references/ticket-workflow.md \
+    skill/kabai/references/docs-zettelkasten.md >> ~/.codex/AGENTS.md
 ```
 
 ### Any other MCP client
 
-`kb.ai` is a standard stdio MCP server (JSON-RPC 2.0, `initialize`,
+`kabai` is a standard stdio MCP server (JSON-RPC 2.0, `initialize`,
 `tools/list`, `tools/call`). Any client that can spawn a command with
-environment variables can use it — configure the `kbai` binary as a stdio
+environment variables can use it — configure the `kabai` binary as a stdio
 server and inject the skill files through whatever instruction/context
 mechanism the client offers (rules file, system prompt, project context).
 
@@ -188,7 +188,7 @@ context ignore the tools or use them partially — one tested agent even
 tried to bypass the MCP server and query PostgreSQL directly.
 
 Always install the skill text into the agent's context, as shown per
-client above. The files in [`skill/kbai/`](../skill/kbai/) are
+client above. The files in [`skill/kabai/`](../skill/kabai/) are
 agent-neutral: `SKILL.md` is the compact core, `references/` holds the two
 full chapters (ticket workflow, knowledge base). They work as separate
 files or concatenated.
@@ -208,7 +208,7 @@ not rely on third-party summaries of parameters — query `tools/list`.
 | Tasks & work log | `add_task`, `update_task`, `complete_task`, `delete_task`, `add_comment`, `list_comments` |
 | Knowledge base | `docs_create_note`, `docs_update_note`, `docs_archive_note`, `docs_get_note`, `docs_list_notes`, `docs_search`, `docs_link_notes`, `docs_unlink_notes`, `docs_link_ticket`, `docs_unlink_ticket`, `docs_verify_note`, `docs_suggest_for_ticket`, `docs_assign_project`, `docs_unassign_project` |
 
-(All names carry the `kb.ai_` prefix.)
+(All names carry the `kabai_` prefix.)
 
 Rule enforcement lives in PostgreSQL triggers, not in the server: illegal
 workflow moves, moving to `done` with open tasks, and closing a
@@ -219,11 +219,11 @@ with a descriptive error message.
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| "Connection refused" | PostgreSQL not running or wrong `KB_AI_DB_*` values |
-| "Illegal Kanban-Move" | Transition not in the project's workflow graph — read `kb.ai_list_status_transitions` first |
+| "Connection refused" | PostgreSQL not running or wrong `KABAI_DB_*` values |
+| "Illegal Kanban-Move" | Transition not in the project's workflow graph — read `kabai_list_status_transitions` first |
 | "Open acceptance criteria" | Ticket has incomplete tasks; complete them before moving to `done` |
-| Move to `done` rejected with docs message | Ticket has `docs_required: true` and no linked note — link one via `kb.ai_docs_link_ticket` |
-| "Missing assignee" on `assign_ticket` | `KB_AI_AGENT_NAME` not set in the server env — set it (and `KB_AI_AGENT_MODEL`) or pass `assignee` explicitly |
-| "Project/Status not found" | Wrong `project_id`/`status_id` — status IDs are per project, discover them via `kb.ai_list_board_statuses` |
+| Move to `done` rejected with docs message | Ticket has `docs_required: true` and no linked note — link one via `kabai_docs_link_ticket` |
+| "Missing assignee" on `assign_ticket` | `KABAI_AGENT_NAME` not set in the server env — set it (and `KABAI_AGENT_MODEL`) or pass `assignee` explicitly |
+| "Project/Status not found" | Wrong `project_id`/`status_id` — status IDs are per project, discover them via `kabai_list_board_statuses` |
 | Agent sees the tools but never calls them | Skill/rules text not in the agent's context — install it per the client sections above |
 | Agent claims a tool does not exist | Tool-name prefix variance — the agent must match by suffix (the skill explains this); verify the server is listed in the client's MCP status view |
