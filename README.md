@@ -30,40 +30,45 @@ the backend and the source of truth; builds use **Nix flakes**.
 
 ## Quick start
 
-### Build
+### 1. Install the binary
 
 ```bash
-nix develop      # dev shell with all dependencies
-nix build        # standard (dynamically linked) build
-nix build .#static   # statically linked release binary
+nix profile install git+https://codeberg.org/danszek/kb.ai.git
 ```
 
-### Create the database schema
+(For development instead: `git clone`, then `nix develop` for the dev
+shell, `nix build` for a dynamically linked build, or `nix build .#static`
+for the statically linked release binary.)
+
+### 2. Set up the database
+
+kabai needs a PostgreSQL database with the schema applied. Use the sister
+project **[Kabai UI](https://codeberg.org/danszek/kbai-ui)** to run the
+schema migrations (and to get a human-friendly board view on top).
+
+Developers working on kabai itself can apply the plain-SQL migrations
+directly — they live in `migrations/` (the source of truth, idempotent,
+safe to re-run):
 
 ```bash
-createdb kabai
-# apply all migrations in order
-for f in migrations/V*.sql; do psql -U postgres -d kabai -f "$f"; done
+for f in migrations/V*.sql; do psql -d kabai -f "$f"; done
 ```
 
-Migrations are idempotent (`IF NOT EXISTS` style); re-running is safe.
+### 3. Connect your AI agent
 
-### Run the MCP server
+There is **no server process to run**: your agent's MCP client spawns the
+`kabai` binary per session and talks to it over stdio (JSON-RPC 2.0); the
+only long-running component is PostgreSQL. Configure the binary as a stdio
+MCP server in your client, with the connection settings as environment
+variables in that config:
 
-```bash
-KABAI_DB_HOST=localhost \
-KABAI_DB_PORT=5432 \
-KABAI_DB_NAME=kabai \
-KABAI_DB_USER=postgres \
-KABAI_DB_PASSWORD=yourpassword \
-KABAI_AGENT_NAME=my-agent \
-KABAI_AGENT_MODEL=my-model \
-nix run .
-```
+- `KABAI_DB_HOST` / `KABAI_DB_PORT` / `KABAI_DB_NAME` / `KABAI_DB_USER` /
+  `KABAI_DB_PASSWORD` — PostgreSQL connection
+- `KABAI_AGENT_NAME` / `KABAI_AGENT_MODEL` — agent identity for ticket
+  assignment
 
-The server reads JSON-RPC from stdin and writes to stdout (MCP over stdio).
-`KABAI_AGENT_NAME`/`KABAI_AGENT_MODEL` identify the agent for ticket
-assignment.
+Concrete config snippets for Claude Code, Gemini CLI, Codex, and generic
+MCP clients: [docs/MCP_USAGE.md](docs/MCP_USAGE.md).
 
 ### Install the agent skill (recommended)
 
