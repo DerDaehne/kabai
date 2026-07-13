@@ -197,8 +197,10 @@ static cJSON *handle_request(McpRegistry *r, McpContext *ctx,
 
     cJSON *method_j = cJSON_GetObjectItemCaseSensitive(req, "method");
     if (!method_j || !cJSON_IsString(method_j)) {
+        /* id_j lives inside req — build the response before freeing the tree */
+        cJSON *err = jsonrpc_error(id_j, -32600, "Invalid Request: missing method");
         cJSON_Delete(req);
-        return jsonrpc_error(id_j, -32600, "Invalid Request: missing method");
+        return err;
     }
     const char *method = method_j->valuestring;
     cJSON *params = cJSON_GetObjectItemCaseSensitive(req, "params");
