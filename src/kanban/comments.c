@@ -10,6 +10,7 @@ TicketComment *comment_add(
     const char *comment_text
 ) {
     if (!db || !author || !comment_text) return NULL;
+    db_clear_error(db);
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
@@ -22,6 +23,7 @@ TicketComment *comment_add(
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         fprintf(stderr, "comment_add: %s\n", res ? PQresultErrorMessage(res) : "null result");
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return NULL;
     }

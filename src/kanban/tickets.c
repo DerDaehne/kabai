@@ -45,6 +45,7 @@ Ticket *ticket_create(
     const char *type
 ) {
     if (!db || !title) return NULL;
+    db_clear_error(db);
 
     const char *effective_type = (type && type[0]) ? type : "ticket";
 
@@ -70,6 +71,7 @@ Ticket *ticket_create(
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         fprintf(stderr, "ticket_create: %s\n", res ? PQresultErrorMessage(res) : "null result");
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return NULL;
     }
@@ -414,6 +416,7 @@ int ticket_update_description(DatabaseConnection *db, int ticket_id, const char 
 
 TicketTask *ticket_add_task(DatabaseConnection *db, int ticket_id, const char *title) {
     if (!db || !title) return NULL;
+    db_clear_error(db);
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
@@ -425,6 +428,7 @@ TicketTask *ticket_add_task(DatabaseConnection *db, int ticket_id, const char *t
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         fprintf(stderr, "ticket_add_task: %s\n", res ? PQresultErrorMessage(res) : "null result");
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return NULL;
     }
@@ -546,6 +550,7 @@ void ticket_task_free_array(TicketTask **tasks) {
 
 int ticket_link(DatabaseConnection *db, int from_id, int to_id, const char *relation_type) {
     if (!db || !relation_type) return 0;
+    db_clear_error(db);
 
     char from_str[32], to_str[32];
     snprintf(from_str, sizeof(from_str), "%d", from_id);
@@ -559,6 +564,7 @@ int ticket_link(DatabaseConnection *db, int from_id, int to_id, const char *rela
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
         fprintf(stderr, "ticket_link: %s\n", res ? PQresultErrorMessage(res) : "null result");
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }

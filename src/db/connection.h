@@ -5,9 +5,17 @@
 
 /**
  * @brief Database connection handle
+ *
+ * last_* fields hold details of the most recent failed query, captured
+ * via db_capture_error() before the PGresult is cleared (the service
+ * layer discards results; the tool layer maps these to actionable
+ * errors). Empty strings when the last capture-enabled call succeeded.
  */
 typedef struct {
     PGconn *conn;
+    char last_sqlstate[6];
+    char last_constraint[64];
+    char last_primary[512];
 } DatabaseConnection;
 
 /**
@@ -32,5 +40,18 @@ DatabaseConnection* db_connect(
  * @param db Database connection
  */
 void db_disconnect(DatabaseConnection *db);
+
+/**
+ * @brief Reset the captured error details (call before a query whose
+ *        failure details should be reported)
+ */
+void db_clear_error(DatabaseConnection *db);
+
+/**
+ * @brief Capture SQLSTATE/constraint/primary message of a failed query
+ * @param db  Database connection
+ * @param res Failed PGresult (may be NULL: falls back to PQerrorMessage)
+ */
+void db_capture_error(DatabaseConnection *db, PGresult *res);
 
 #endif // DB_CONNECTION_H

@@ -9,6 +9,60 @@
 #include "kanban/board_statuses.h"
 
 /* ============================================================================
+ * Error mapping
+ * ============================================================================ */
+
+/* Map the captured SQLSTATE/constraint of the last failed service call to
+ * an actionable tool error (Kanban AI #345); mirrors docs_db_error in the
+ * docs module. Falls back to the generic text when nothing was captured. */
+static cJSON *kanban_db_error(McpContext *ctx, cJSON *id, const char *fallback) {
+    DatabaseConnection *db = ctx->db;
+    const char *st = db->last_sqlstate;
+    const char *cn = db->last_constraint;
+
+    if (strcmp(st, "23503") == 0) {  /* foreign_key_violation */
+        if (strcmp(cn, "check_ticket_status_project") == 0 ||
+            strcmp(cn, "check_same_project_from") == 0 ||
+            strcmp(cn, "check_same_project_to") == 0)
+            return mcp_tool_err(id,
+                "status_id does not belong to the given project_id: board columns are "
+                "per project — look them up via kabai_list_board_statuses(project_id)");
+        if (strstr(cn, "project_id"))
+            return mcp_tool_err(id,
+                "project_id does not exist: check kabai_list_projects");
+        if (strstr(cn, "status_id"))
+            return mcp_tool_err(id,
+                "status_id does not exist: check kabai_list_board_statuses(project_id)");
+        if (strstr(cn, "ticket"))
+            return mcp_tool_err(id,
+                "ticket_id does not exist: check the ID (the ticket may have been deleted)");
+        return mcp_tool_err(id, "Referenced row does not exist (foreign key violation)");
+    }
+    if (strcmp(st, "23505") == 0) {  /* unique_violation */
+        if (strstr(cn, "slug"))
+            return mcp_tool_err(id, "Slug already exists: project slugs are unique");
+        if (strstr(cn, "board_statuses"))
+            return mcp_tool_err(id, "A column with this name already exists in this project");
+        return mcp_tool_err(id, "Already exists (duplicate)");
+    }
+    if (strcmp(st, "23514") == 0) {  /* check_violation */
+        if (strstr(cn, "self"))
+            return mcp_tool_err(id, "A ticket cannot relate to or block itself");
+        return mcp_tool_err(id, db->last_primary[0] ? db->last_primary
+                                                    : "Constraint violation");
+    }
+    if (strcmp(st, "P0001") == 0 && db->last_primary[0])  /* trigger RAISE */
+        return mcp_tool_err(id, db->last_primary);
+    if (db->last_primary[0]) {
+        char buf[600];
+        snprintf(buf, sizeof(buf), "%s: %s", fallback, db->last_primary);
+        return mcp_tool_err(id, buf);
+    }
+    return mcp_tool_err(id, fallback);
+}
+
+
+/* ============================================================================
  * Projects
  * ============================================================================ */
 
@@ -19,7 +73,7 @@ static cJSON *tool_create_project(McpContext *ctx, cJSON *id, cJSON *params) {
         return mcp_tool_err(id, "Missing required parameters: slug, name");
 
     Project *p = project_create(ctx->db, slug, name, param_str(params, "description"));
-    if (!p) return mcp_tool_err(id, "Failed to create project");
+    if (!p) return kanban_db_error(ctx, id, "Failed to create project");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddNumberToObject(r, "id", p->id);
@@ -84,7 +138,7 @@ static cJSON *tool_create_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
 
     Ticket *t = ticket_create(ctx->db, project_id, status_id, title,
                               param_str(params, "description"), type_val);
-    if (!t) return mcp_tool_err(id, "Failed to create ticket");
+    if (!t) return kanban_db_error(ctx, id, "Failed to create ticket");
 
     bool docs_required = param_bool(params, "docs_required", false);
     if (docs_required) {
@@ -526,7 +580,8 @@ static cJSON *tool_link_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
             "Invalid relation_type: must be parent_of, blocks, duplicate_of, or relates_to");
 
     if (!ticket_link(ctx->db, from_id, to_id, rel))
-        return mcp_tool_err(id, "Failed to create relation (may already exist or ticket not found)");
+        return kanban_db_error(ctx, id,
+            "Failed to create relation (may already exist or ticket not found)");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
@@ -561,7 +616,7 @@ static cJSON *tool_add_task(McpContext *ctx, cJSON *id, cJSON *params) {
         return mcp_tool_err(id, "Missing required parameters: ticket_id, title");
 
     TicketTask *task = ticket_add_task(ctx->db, ticket_id, title);
-    if (!task) return mcp_tool_err(id, "Failed to add task");
+    if (!task) return kanban_db_error(ctx, id, "Failed to add task");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddNumberToObject(r, "id", task->id);
@@ -598,7 +653,7 @@ static cJSON *tool_add_comment(McpContext *ctx, cJSON *id, cJSON *params) {
         return mcp_tool_err(id, "Missing required parameters: ticket_id, author, text");
 
     TicketComment *c = comment_add(ctx->db, ticket_id, author, text);
-    if (!c) return mcp_tool_err(id, "Failed to add comment");
+    if (!c) return kanban_db_error(ctx, id, "Failed to add comment");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddNumberToObject(r, "id", c->id);
@@ -679,7 +734,7 @@ static cJSON *tool_create_board_status(McpContext *ctx, cJSON *id, cJSON *params
         param_str(params, "agent_role_instruction"),
         NULL  /* special_type not exposed via MCP — managed internally */
     );
-    if (!bs) return mcp_tool_err(id, "Failed to create board status");
+    if (!bs) return kanban_db_error(ctx, id, "Failed to create board status");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddNumberToObject(r, "id", bs->id);
@@ -702,7 +757,7 @@ static cJSON *tool_create_status_transition(McpContext *ctx, cJSON *id, cJSON *p
             "Missing required parameters: project_id, from_status_id, to_status_id");
 
     if (!status_transition_create(ctx->db, project_id, from_id, to_id))
-        return mcp_tool_err(id, "Failed to create status transition");
+        return kanban_db_error(ctx, id, "Failed to create status transition");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);

@@ -11,6 +11,7 @@ Project *project_create(
     const char *description
 ) {
     if (!db || !slug || !name) return NULL;
+    db_clear_error(db);
 
     PGresult *res;
 
@@ -28,6 +29,7 @@ Project *project_create(
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         fprintf(stderr, "project_create: %s\n", res ? PQresultErrorMessage(res) : "null result");
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return NULL;
     }

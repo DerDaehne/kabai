@@ -13,6 +13,7 @@ BoardStatus *board_status_create(
     const char *special_type
 ) {
     if (!db || !name || !display_name) return NULL;
+    db_clear_error(db);
 
     char proj_str[32], pos_str[32];
     snprintf(proj_str, sizeof(proj_str), "%d", project_id);
@@ -50,6 +51,7 @@ BoardStatus *board_status_create(
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         fprintf(stderr, "board_status_create: %s\n",
                 res ? PQresultErrorMessage(res) : "null result");
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return NULL;
     }
@@ -123,6 +125,7 @@ int status_transition_create(
     int to_status_id
 ) {
     if (!db) return 0;
+    db_clear_error(db);
 
     char proj_str[32], from_str[32], to_str[32];
     snprintf(proj_str, sizeof(proj_str), "%d", project_id);
@@ -138,6 +141,7 @@ int status_transition_create(
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
         fprintf(stderr, "status_transition_create: %s\n",
                 res ? PQresultErrorMessage(res) : "null result");
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
