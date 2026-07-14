@@ -782,7 +782,13 @@ static cJSON *tool_docs_suggest_for_ticket(McpContext *ctx, cJSON *id, cJSON *pa
     if (res) PQclear(res);
 
     /* Signal 2: FTS of the ticket title (OR over its lexemes; the rank
-     * threshold suppresses pseudo-hits from common words). */
+     * threshold suppresses pseudo-hits from common words). Scoped to notes
+     * of the ticket's project or project-less (global) notes; notes that
+     * belong only to other projects need include_other_projects=true. The
+     * graph signal above stays cross-project: explicit relations are
+     * intentional. */
+    bool include_other = param_bool(params, "include_other_projects", false);
+    const char *fts_params[2] = {tid_str, include_other ? "t" : "f"};
     res = PQexecParams(ctx->db->conn,
         "WITH q AS ( "
         "  SELECT to_tsquery('simple', string_agg(lexeme, ' | ')) AS query "
@@ -794,11 +800,17 @@ static cJSON *tool_docs_suggest_for_ticket(McpContext *ctx, cJSON *id, cJSON *pa
         "WHERE q.query IS NOT NULL AND n.search_tsv @@ q.query "
         "  AND ts_rank(n.search_tsv, q.query) >= 0.05 "
         "  AND NOT n.archived "
+        "  AND ($2::bool "
+        "       OR NOT EXISTS (SELECT 1 FROM note_projects np WHERE np.note_id = n.id) "
+        "       OR EXISTS (SELECT 1 FROM note_projects np "
+        "                   WHERE np.note_id = n.id "
+        "                     AND np.project_id = (SELECT project_id FROM tickets "
+        "                                           WHERE id = $1))) "
         "  AND NOT EXISTS (SELECT 1 FROM note_ticket_links own "
         "                   WHERE own.note_id = n.id AND own.ticket_id = $1) "
         "ORDER BY ts_rank(n.search_tsv, q.query) DESC "
         "LIMIT 5",
-        1, NULL, tid_param, NULL, NULL, 0);
+        2, NULL, fts_params, NULL, NULL, 0);
     if (res && PQresultStatus(res) == PGRES_TUPLES_OK) {
         for (int i = 0; i < PQntuples(res); i++) {
             int nid = atoi(PQgetvalue(res, i, 0));
@@ -992,6 +1004,10 @@ void docs_register_tools(McpRegistry *r) {
 
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
+    schema_bool(s, "include_other_projects",
+        "Also return full-text matches from notes assigned only to OTHER projects "
+        "(default false: only notes of the ticket's project and project-less global notes)",
+        false);
     mcp_registry_add(r, "kabai_docs_suggest_for_ticket",
         "Suggest knowledge-base notes likely relevant to a ticket, combining the relation "
         "graph (notes linked to related tickets) with a full-text match of the ticket "

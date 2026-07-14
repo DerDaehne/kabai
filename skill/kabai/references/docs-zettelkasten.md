@@ -175,7 +175,9 @@ While working a ticket you learned or decided something. Walk this list:
 - `summary: true` for all overviews; paginate with limit/offset.
 - On ticket pickup, call `kabai_docs_suggest_for_ticket {"ticket_id": N}`:
   it combines the ticket-relation graph with a full-text match and states
-  a reason per suggestion. Also read the ticket's `linked_notes` from
+  a reason per suggestion. Text matches are scoped to the ticket's project
+  plus project-less (global) notes; pass `include_other_projects: true` to
+  widen. Also read the ticket's `linked_notes` from
   `kabai_get_ticket_detailed`.
 - `kabai_docs_assign_project`/`unassign_project` fix project scoping when
   a note turns out to be relevant to more (or fewer) projects.
