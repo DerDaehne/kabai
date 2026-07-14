@@ -81,7 +81,7 @@
             echo "  KABAI_AGENT_MODEL  (default: none)"
             echo ""
             export CFLAGS="-I./src -I${pkgs.postgresql.dev}/include -I${pkgs.cjson}/include"
-            export LDFLAGS="-L${pkgs.postgresql.lib}/lib -L${pkgs.cjson.lib}/lib -lpq -lcjson"
+            export LDFLAGS="-L${pkgs.postgresql.lib}/lib -L${pkgs.cjson}/lib -lpq -lcjson"
           '';
         };
       }
