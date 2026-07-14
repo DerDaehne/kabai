@@ -224,23 +224,27 @@ Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status
         params[nparams++] = sid_str;
         qpos += snprintf(query + qpos, sizeof(query) - qpos,
                          " AND status_id = $%d", nparams);
+        if (qpos < 0 || qpos >= (int)sizeof(query)) return NULL;
     }
 
     if (type_filter && type_filter[0]) {
         params[nparams++] = type_filter;
         qpos += snprintf(query + qpos, sizeof(query) - qpos,
                          " AND type = $%d", nparams);
+        if (qpos < 0 || qpos >= (int)sizeof(query)) return NULL;
     }
 
     qpos += snprintf(query + qpos, sizeof(query) - qpos, " ORDER BY created_at");
+    if (qpos < 0 || qpos >= (int)sizeof(query)) return NULL;
 
     if (limit > 0) {
         snprintf(lim_str, sizeof(lim_str), "%d", limit);
         snprintf(off_str, sizeof(off_str), "%d", offset);
         params[nparams++] = lim_str;
         params[nparams++] = off_str;
-        snprintf(query + qpos, sizeof(query) - qpos,
-                 " LIMIT $%d OFFSET $%d", nparams - 1, nparams);
+        int n = snprintf(query + qpos, sizeof(query) - qpos,
+                         " LIMIT $%d OFFSET $%d", nparams - 1, nparams);
+        if (n < 0 || n >= (int)(sizeof(query) - qpos)) return NULL;
     }
 
     PGresult *res = PQexecParams(db->conn, query, nparams, NULL, params, NULL, NULL, 0);
@@ -353,8 +357,9 @@ int ticket_assign(DatabaseConnection *db, int ticket_id, const char *assignee, c
         return 0;
     }
 
+    int affected = atoi(PQcmdTuples(res));
     PQclear(res);
-    return 1;
+    return affected > 0;
 }
 
 int ticket_update_title(DatabaseConnection *db, int ticket_id, const char *new_title) {
@@ -373,8 +378,9 @@ int ticket_update_title(DatabaseConnection *db, int ticket_id, const char *new_t
         return 0;
     }
 
+    int affected = atoi(PQcmdTuples(res));
     PQclear(res);
-    return 1;
+    return affected > 0;
 }
 
 int ticket_update_description(DatabaseConnection *db, int ticket_id, const char *new_description) {
@@ -401,8 +407,9 @@ int ticket_update_description(DatabaseConnection *db, int ticket_id, const char 
         return 0;
     }
 
+    int affected = atoi(PQcmdTuples(res));
     PQclear(res);
-    return 1;
+    return affected > 0;
 }
 
 /* ============================================================================
@@ -455,8 +462,9 @@ int ticket_complete_task(DatabaseConnection *db, int task_id) {
         return 0;
     }
 
+    int affected = atoi(PQcmdTuples(res));
     PQclear(res);
-    return 1;
+    return affected > 0;
 }
 
 TicketTask **ticket_get_tasks(DatabaseConnection *db, int ticket_id) {

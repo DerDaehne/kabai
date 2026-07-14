@@ -416,7 +416,7 @@ static cJSON *tool_assign_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
             "recommended for tracking which model worked the ticket)");
 
     if (!ticket_assign(ctx->db, ticket_id, assignee, ctx->agent_model))
-        return mcp_tool_err(id, "Failed to assign ticket");
+        return mcp_tool_err(id, "Ticket not found (or assign failed)");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
@@ -429,18 +429,23 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         return mcp_tool_err(id, "Missing required parameter: ticket_id");
 
     int updated = 0;
+    int provided = 0;
 
     const char *title = param_str(params, "title");
-    if (title)
+    if (title) {
+        provided++;
         updated += ticket_update_title(ctx->db, ticket_id, title);
+    }
 
     if (param_present(params, "description")) {
+        provided++;
         const char *new_desc = param_is_null(params, "description")
                              ? NULL : param_str(params, "description");
         updated += ticket_update_description(ctx->db, ticket_id, new_desc);
     }
 
     if (param_present(params, "docs_required")) {
+        provided++;
         char tid_str[32];
         snprintf(tid_str, sizeof(tid_str), "%d", ticket_id);
         const char *dp[2] = {tid_str,
@@ -454,8 +459,10 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         if (dres) PQclear(dres);
     }
 
-    if (!updated)
+    if (!provided)
         return mcp_tool_err(id, "No updatable fields provided (title, description, docs_required)");
+    if (!updated)
+        return mcp_tool_err(id, "Ticket not found");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
@@ -558,7 +565,7 @@ static cJSON *tool_complete_task(McpContext *ctx, cJSON *id, cJSON *params) {
         return mcp_tool_err(id, "Missing required parameter: task_id");
 
     if (!ticket_complete_task(ctx->db, task_id))
-        return mcp_tool_err(id, "Failed to complete task");
+        return mcp_tool_err(id, "Task not found (or update failed)");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
