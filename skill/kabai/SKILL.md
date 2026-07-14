@@ -77,6 +77,9 @@ and improvise.
    `human_answered`.
 8. **Epics** group children via `kabai_link_tickets(parent_of)`; `blocks`
    expresses ordering; duplicates get merged, not abandoned.
+9. **docs_required is mandatory** for architecture, design-decision, and
+   schema work — and for EVERY epic. An epic MUST NOT close without a
+   note created or substantially updated and linked during its lifetime.
 
 ## Golden rules — knowledge base
 
@@ -92,12 +95,17 @@ and improvise.
 4. **Never rewrite decision history**: a replaced decision gets a new note
    plus a `supersedes` link. Conflicts you cannot resolve get
    `contradicts`.
-5. **Verify what you read**: confirmed a note still matches reality →
-   `kabai_docs_verify_note(note_id, ticket_id)`.
+5. **Verify what you read** — at fixed workflow points, not as a favor:
+   on pickup, verify each linked note you read and confirmed
+   (`kabai_docs_verify_note(note_id, ticket_id)`); in review, check and
+   verify the ticket's linked notes.
 6. **Archive, don't delete** (`kabai_docs_archive_note` with reason) —
    and only for wrong/irrelevant content, not for old age.
 7. **On ticket pickup**: read `linked_notes` from
    `kabai_get_ticket_detailed` and call `kabai_docs_suggest_for_ticket`.
+8. **Document early, update often.** On docs_required tickets, create or
+   update the note at pickup or at the first design decision and link it
+   immediately — never as a closing chore right before done.
 
 ## Efficiency
 
@@ -114,4 +122,6 @@ Bypassing the MCP tools (direct SQL, grepping the filesystem for board
 data) · unassigned work · empty task lists · batch-completing tasks ·
 skipping columns · stale descriptions · questions to humans without the
 human_intervention move · knowledge only in comments · duplicate
-tickets/notes · orphan notes · editing ADRs instead of superseding them.
+tickets/notes · orphan notes · editing ADRs instead of superseding them ·
+epics closed without new/updated linked docs · notes written only as a
+closing chore before done · notes nobody ever verifies.

@@ -116,6 +116,11 @@ knowledge from the ticket side (`kabai_get_ticket_detailed` returns
   `kabai_docs_verify_note {"note_id": N, "ticket_id": T}`. Verification
   age is shown everywhere; old or missing verification tells agents to
   double-check before trusting.
+- **Fixed verification triggers — part of the workflow, not a favor:**
+  (a) on ticket pickup, after reading the ticket's `linked_notes`, verify
+  each note you confirmed against reality; (b) when reviewing a ticket
+  (review column), check its linked notes and verify them. A note nobody
+  ever verifies is a rumor, not knowledge.
 - **Staleness review:** `kabai_docs_list_notes {"project_id": P,
   "unverified_since_days": 30, "summary": true}` lists notes nobody has
   confirmed recently.
@@ -131,13 +136,21 @@ knowledge from the ticket side (`kabai_get_ticket_detailed` returns
 
 ## 8. docs_required gating
 
-Tickets can carry `docs_required: true` (set it when creating
-architecturally relevant tickets — new subsystems, ADR-worthy decisions,
-schema changes). Such a ticket **cannot move to done** until a note is
-linked. When you finish one: write/update the note, `link_ticket`
-(`documents` or `created_by`), then move. If you believe no docs are
-needed after all, unset the flag via `kabai_update_ticket` and justify it
-in a work-log comment.
+Tickets can carry `docs_required: true`. Setting it is MANDATORY for
+architecture, design-decision, and schema work (new subsystems, ADR-worthy
+decisions, schema changes) — and for EVERY epic: an epic MUST NOT close
+without at least one note created or substantially updated and linked
+during its lifetime. Reviewers MUST reject tickets that should have
+carried the flag. Such a ticket **cannot move to done** until a note is
+linked.
+
+**Document early, update often.** Create the note (or a draft skeleton)
+when you pick the ticket up or at the first design decision, link it
+immediately (`created_by`), and keep it current as the work evolves.
+Writing the note as a closing chore right before `done` produces
+summary-of-work notes instead of living knowledge. If you believe no docs
+are needed after all, unset the flag via `kabai_update_ticket` and justify
+it in a work-log comment — this escape hatch does NOT apply to epics.
 
 ## 9. When to write a note — decision path
 
@@ -180,3 +193,6 @@ While working a ticket you learned or decided something. Walk this list:
 - Duplicate notes because search was skipped.
 - Archiving instead of superseding, or deleting knowledge that was merely
   outdated.
+- Epic closed without a new or substantially updated, linked note.
+- Documentation written only as a closing chore right before done.
+- Notes that are never verified — verification age is the trust signal.

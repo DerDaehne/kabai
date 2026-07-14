@@ -50,10 +50,15 @@ kabai_list_board_statuses {"project_id": 4}
   acceptance criteria. A title-only ticket is not workable by another agent.
 - **Type:** use `type: "epic"` only for umbrella goals that group child
   tickets; everything else is the default `ticket`.
-- **docs_required:** set `docs_required: true` on architecturally relevant
-  work (new subsystem, ADR-worthy decision, schema change). Such a ticket
-  cannot move to done without a linked knowledge-base note — see the docs
-  chapter.
+- **docs_required:** architecture, design-decision, and schema work MUST
+  be created with `docs_required: true` (new subsystem, ADR-worthy
+  decision, schema change) — this is a duty, not a suggestion; reviewers
+  MUST reject tickets that should have carried the flag. EVERY epic gets
+  `docs_required: true`, no exceptions: an epic MUST NOT close without at
+  least one knowledge-base note created or substantially updated and
+  linked during its lifetime. Such a ticket cannot move to done without a
+  linked note — and do not defer the note to the end (document early; see
+  the docs chapter, §8/§9).
 - **Assign immediately.** Directly after `create_ticket` (or after picking
   up an existing ticket), call `kabai_assign_ticket(ticket_id)`. It records
   assignee and model from the server environment. NEVER work a ticket that
@@ -128,9 +133,11 @@ NEVER guess on decisions that are the project owner's to make; escalate.
 
 `kabai_link_tickets(from_ticket_id, to_ticket_id, relation_type)`:
 
-- `parent_of` — epic → child. Create the epic (`type: "epic"`), then link
-  each child. An epic is done only when every child is done or explicitly
-  descoped (comment on the epic saying which and why).
+- `parent_of` — epic → child. Create the epic (`type: "epic"`, always
+  with `docs_required: true`), then link each child. An epic is done only
+  when every child is done or explicitly descoped (comment on the epic
+  saying which and why) AND its documentation duty is met: a note created
+  or substantially updated during the epic, linked to it.
 - `blocks` — hard ordering: `from` must finish before `to` can start. Set
   it whenever you know the dependency; agents use it to pick workable
   tickets.
@@ -198,3 +205,5 @@ from_status_id, to_status_id)` set up new boards. Rules:
 - Question to the human buried in a comment without moving to
   human_intervention (nobody will see it).
 - Knowledge written only into comments instead of the knowledge base.
+- Epic closed without a new or substantially updated, linked note — or an
+  architecture/design/schema ticket created without `docs_required: true`.
