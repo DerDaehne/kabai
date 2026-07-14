@@ -37,14 +37,6 @@ Project* project_create(
 Project* project_get_by_id(DatabaseConnection *db, int project_id);
 
 /**
- * @brief Get project by slug
- * @param db Database connection
- * @param slug Project slug
- * @return Project* or NULL if not found
- */
-Project* project_get_by_slug(DatabaseConnection *db, const char *slug);
-
-/**
  * @brief List all projects
  * @param db Database connection
  * @return Array of Project* (NULL-terminated)

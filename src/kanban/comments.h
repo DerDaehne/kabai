@@ -38,35 +38,6 @@ TicketComment* comment_add(
 TicketComment** comment_list_by_ticket(DatabaseConnection *db, int ticket_id);
 
 /**
- * @brief Get a specific comment by ID
- * @param db Database connection
- * @param comment_id Comment ID
- * @return TicketComment* or NULL if not found
- */
-TicketComment* comment_get_by_id(DatabaseConnection *db, int comment_id);
-
-/**
- * @brief Update a comment
- * @param db Database connection
- * @param comment_id Comment ID
- * @param new_text New comment text
- * @return 1 on success, 0 on failure
- */
-int comment_update(
-    DatabaseConnection *db,
-    int comment_id,
-    const char *new_text
-);
-
-/**
- * @brief Delete a comment
- * @param db Database connection
- * @param comment_id Comment ID
- * @return 1 on success, 0 on failure
- */
-int comment_delete(DatabaseConnection *db, int comment_id);
-
-/**
  * @brief Free comment memory
  * @param comment Comment to free
  */

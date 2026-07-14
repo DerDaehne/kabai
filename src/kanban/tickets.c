@@ -197,10 +197,6 @@ static Ticket **parse_ticket_rows(PGresult *res) {
     return tickets;
 }
 
-Ticket **ticket_list_by_project(DatabaseConnection *db, int project_id) {
-    return ticket_list_filtered(db, project_id, 0, NULL, 0, 0);
-}
-
 Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id,
                                const char *type_filter, int limit, int offset) {
     if (!db) return NULL;

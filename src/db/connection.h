@@ -33,19 +33,4 @@ DatabaseConnection* db_connect(
  */
 void db_disconnect(DatabaseConnection *db);
 
-/**
- * @brief Execute a SQL query
- * @param db Database connection
- * @param query SQL query string
- * @return PGresult* or NULL on failure
- */
-PGresult* db_query(DatabaseConnection *db, const char *query);
-
-/**
- * @brief Get connection status
- * @param db Database connection
- * @return 1 if connected, 0 otherwise
- */
-int db_is_connected(DatabaseConnection *db);
-
 #endif // DB_CONNECTION_H

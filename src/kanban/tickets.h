@@ -84,14 +84,6 @@ Ticket* ticket_create(
 Ticket* ticket_get_by_id(DatabaseConnection *db, int ticket_id);
 
 /**
- * @brief List tickets by project
- * @param db Database connection
- * @param project_id Project ID
- * @return Array of Ticket* (NULL-terminated)
- */
-Ticket** ticket_list_by_project(DatabaseConnection *db, int project_id);
-
-/**
  * @brief List tickets with optional status filter and pagination
  * @param db Database connection
  * @param project_id Project ID

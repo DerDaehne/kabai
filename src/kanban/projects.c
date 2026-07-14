@@ -74,32 +74,6 @@ Project *project_get_by_id(DatabaseConnection *db, int project_id) {
     return p;
 }
 
-Project *project_get_by_slug(DatabaseConnection *db, const char *slug) {
-    if (!db || !slug) return NULL;
-
-    const char *params[1] = {slug};
-    PGresult *res = PQexecParams(db->conn,
-        "SELECT id, slug, name, description FROM projects WHERE slug = $1",
-        1, NULL, params, NULL, NULL, 0);
-
-    if (!res || PQntuples(res) == 0) {
-        if (res) PQclear(res);
-        return NULL;
-    }
-
-    Project *p = malloc(sizeof(Project));
-    if (!p) { PQclear(res); return NULL; }
-
-    p->id   = atoi(PQgetvalue(res, 0, 0));
-    p->slug = strdup(PQgetvalue(res, 0, 1));
-    p->name = strdup(PQgetvalue(res, 0, 2));
-    const char *desc = PQgetvalue(res, 0, 3);
-    p->description = (desc && *desc) ? strdup(desc) : NULL;
-
-    PQclear(res);
-    return p;
-}
-
 Project **project_list_all(DatabaseConnection *db) {
     if (!db) return NULL;
 
