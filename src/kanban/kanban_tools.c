@@ -342,6 +342,11 @@ static cJSON *tool_move_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
             return mcp_tool_err(id, "Invalid ticket transition: check workflow rules");
         if (raw && strstr(raw, "Akzeptanzkriterium"))
             return mcp_tool_err(id, "Cannot close ticket: open acceptance criteria remain");
+        if (raw && strstr(raw, "Epic documentation duty"))
+            return mcp_tool_err(id,
+                "Cannot close epic: an epic must not close without at least one "
+                "knowledge-base note created or substantially updated during its "
+                "lifetime. Create/update the note and link it via kabai_docs_link_ticket");
         if (raw && strstr(raw, "Docs requirement"))
             return mcp_tool_err(id,
                 "Cannot close ticket: docs_required is set but no knowledge-base note is "
@@ -384,6 +389,8 @@ static cJSON *tool_move_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
                 cJSON_AddStringToObject(entry, "error", "Invalid transition");
             else if (raw && strstr(raw, "Akzeptanzkriterium"))
                 cJSON_AddStringToObject(entry, "error", "Open acceptance criteria remain");
+            else if (raw && strstr(raw, "Epic documentation duty"))
+                cJSON_AddStringToObject(entry, "error", "epic cannot close without a linked note");
             else if (raw && strstr(raw, "Docs requirement"))
                 cJSON_AddStringToObject(entry, "error", "docs_required set but no note linked");
             else
@@ -456,6 +463,12 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         if (dres && PQresultStatus(dres) == PGRES_COMMAND_OK &&
             atoi(PQcmdTuples(dres)) > 0)
             updated += 1;
+        else if (dres && strstr(PQresultErrorMessage(dres), "Epic documentation duty")) {
+            PQclear(dres);
+            return mcp_tool_err(id,
+                "docs_required cannot be unset on an epic: an epic must not close "
+                "without a linked knowledge-base note");
+        }
         if (dres) PQclear(dres);
     }
 

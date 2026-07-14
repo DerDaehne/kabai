@@ -38,11 +38,12 @@ which runs the schema migrations for you.
 
 Developers working on kabai itself can apply the plain-SQL migrations
 directly from this repo (`migrations/`, source of truth, idempotent,
-currently V1–V9):
+currently V1–V10):
 
 ```bash
 createdb kabai
-for f in migrations/V*.sql; do psql -d kabai -f "$f"; done
+# sort -V: apply in numeric version order (lexical order breaks at V10)
+for f in $(ls migrations/V*.sql | sort -V); do psql -d kabai -f "$f"; done
 ```
 
 Projects, board columns, and workflow transitions are then created via the

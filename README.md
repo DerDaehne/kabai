@@ -51,7 +51,8 @@ directly — they live in `migrations/` (the source of truth, idempotent,
 safe to re-run):
 
 ```bash
-for f in migrations/V*.sql; do psql -d kabai -f "$f"; done
+# sort -V: apply in numeric version order (lexical order breaks at V10)
+for f in $(ls migrations/V*.sql | sort -V); do psql -d kabai -f "$f"; done
 ```
 
 ### 3. Connect your AI agent
