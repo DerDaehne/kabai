@@ -253,6 +253,35 @@ static void send_json(cJSON *json) {
     cJSON_Delete(json);
 }
 
+#ifdef _WIN32
+/* getline() is POSIX-only and not provided by the MinGW/MSVCRT runtime */
+#include <sys/types.h>
+static ssize_t kabai_getline(char **lineptr, size_t *n, FILE *stream) {
+    if (!lineptr || !n || !stream) return -1;
+    if (!*lineptr || *n == 0) {
+        *n = 256;
+        *lineptr = malloc(*n);
+        if (!*lineptr) return -1;
+    }
+    size_t len = 0;
+    int c;
+    while ((c = fgetc(stream)) != EOF) {
+        if (len + 2 > *n) {
+            char *grown = realloc(*lineptr, *n * 2);
+            if (!grown) return -1;
+            *lineptr = grown;
+            *n *= 2;
+        }
+        (*lineptr)[len++] = (char)c;
+        if (c == '\n') break;
+    }
+    if (len == 0) return -1;
+    (*lineptr)[len] = '\0';
+    return (ssize_t)len;
+}
+#define getline kabai_getline
+#endif
+
 void mcp_run_stdio_loop(McpRegistry *r, McpContext *ctx, const McpServerInfo *info) {
     /* getline() grows the buffer automatically — no truncation risk */
     char   *line     = NULL;

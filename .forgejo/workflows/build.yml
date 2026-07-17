@@ -23,11 +23,21 @@ jobs:
       - name: Build
         run: nix build . --print-build-logs
 
+      - name: Build (Windows)
+        run: nix build .#windows -o result-windows --print-build-logs
+
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: kbai-linux
           path: ./result/bin/kbai
+          retention-days: 7
+
+      - name: Upload artifact (Windows)
+        uses: actions/upload-artifact@v3
+        with:
+          name: kbai-windows
+          path: ./result-windows/bin/kabai.exe
           retention-days: 7
 
   release:
@@ -47,10 +57,14 @@ jobs:
       - name: Build release binary
         run: nix build . --print-build-logs
 
+      - name: Build release binary (Windows)
+        run: nix build .#windows -o result-windows --print-build-logs
+
       - name: Collect release artifacts
         run: |
           mkdir -p release-dir
           cp result/bin/kbai release-dir/kbai-linux-x86_64
+          cp result-windows/bin/kabai.exe release-dir/kabai-windows-x86_64.exe
 
       - name: Publish release
         uses: actions/forgejo-release@v2.5.0

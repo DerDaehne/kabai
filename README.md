@@ -37,8 +37,8 @@ nix profile install git+https://codeberg.org/danszek/kb.ai.git
 ```
 
 (For development instead: `git clone`, then `nix develop` for the dev
-shell, `nix build` for a dynamically linked build, or `nix build .#static`
-for the statically linked release binary.)
+shell, `nix build` for a dynamically linked Linux build, or
+`nix build .#windows` for the statically linked Windows binary.)
 
 ### 2. Set up the database
 
@@ -152,9 +152,15 @@ kabai/
 
 ## Releases
 
-Statically linked binaries are built for:
-- Linux x86_64 / aarch64
-- macOS x86_64 / arm64
-- Windows (via MinGW)
+Tagged releases (`v*`) are built by CI and ship:
 
-Build with: `nix build .#static`
+- `kbai-linux-x86_64` — dynamically linked Linux binary (`nix build .`)
+- `kabai-windows-x86_64.exe` — statically linked Windows binary with no
+  DLL dependencies beyond the Windows system libraries
+  (`nix build .#windows`, MinGW cross build)
+
+The Windows binary bundles libpq with statically linked OpenSSL, so
+TLS-encrypted database connections (`sslmode=require` etc.) work without
+any additional installation. Configuration is identical on all platforms:
+set the `KABAI_*` environment variables in your MCP client config (see
+Quick start).

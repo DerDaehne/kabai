@@ -14,7 +14,7 @@
       {
         packages.default = pkgs.stdenv.mkDerivation {
           name = "kabai";
-          version = "0.5.0";
+          version = "0.6.0";
           src = ./.;
 
           nativeBuildInputs = with pkgs; [ gcc pkg-config ];
@@ -46,6 +46,106 @@
             cp kabai $out/bin/
           '';
         };
+
+        # Statische Windows-x86_64-Binary (kabai.exe) ohne DLL-Abhängigkeiten.
+        # Kein pkgsStatic: dessen mingw-Triple (x86_64-w64-windows-gnu) scheitert
+        # an config.sub beim Toolchain-Bootstrap. Stattdessen plain mingwW64 und
+        # die Bibliotheken einzeln statisch (libpq baut .a immer mit und behält
+        # sie bei dontDisableStatic im dev-Output).
+        # allowUnsupportedSystem: nixpkgs' libpq deklariert Windows nicht in
+        # meta.platforms, baut aber via mingw (siehe Ticket #520).
+        packages.windows =
+          let
+            pkgsWin = import nixpkgs {
+              inherit system;
+              crossSystem = nixpkgs.lib.systems.examples.mingwW64;
+              config.allowUnsupportedSystem = true;
+            };
+            opensslWin = pkgsWin.openssl.override { static = true; };
+            zlibWin    = pkgsWin.zlib.override { shared = false; };
+            libpqWin   = (pkgsWin.libpq.override {
+              openssl     = opensslWin;
+              zlib        = zlibWin;
+              curlSupport = false;
+            }).overrideAttrs (old: {
+              dontDisableStatic = true;
+              # makeWrappers Hook verlangt eine Host-Bash — die baut nicht für
+              # mingw, und libpq ruft wrapProgram ohnehin nie auf.
+              nativeBuildInputs = builtins.filter
+                (d: !(nixpkgs.lib.hasInfix "wrapper-hook" (d.name or "")))
+                old.nativeBuildInputs;
+              # Statisches libcrypto referenziert Windows-Systemlibs; ohne sie
+              # scheitert configures Link-Test ("library 'crypto' is required").
+              env = (old.env or { }) // {
+                LIBS = "-lws2_32 -lgdi32 -lcrypt32 -lbcrypt";
+              };
+              # Die mingw-Toolchain in nixpkgs nutzt mcfgthread ohne pthread.h;
+              # libpgports pthread-Ersatz braucht winpthreads.
+              buildInputs = (old.buildInputs or [ ]) ++ [ pkgsWin.windows.pthreads ];
+              # Beim win32-Port ist "libpq.a" die Import-Library der DLL.
+              # Wie nixpkgs' isStatic-Zweig: echte statische Lib bauen lassen.
+              postPatch = (old.postPatch or "") + ''
+                substituteInPlace src/interfaces/libpq/Makefile \
+                  --replace-fail "all: all-lib libpq-refs-stamp" "all: all-lib"
+                substituteInPlace src/Makefile.shlib \
+                  --replace-fail "all-lib: all-shared-lib" "all-lib: all-static-lib" \
+                  --replace-fail "install-lib: install-lib-shared" "install-lib: install-lib-static"
+              '';
+              # Auf win32 ist $(stlib) trotzdem nur die per --out-implib
+              # erzeugte Import-Lib der DLL (Makefile.shlib, haslibarule).
+              # Echtes statisches Archiv aus den Objekten überschreibt sie;
+              # install-lib-static installiert es dann unverändert.
+              postBuild = ''
+                rm -f src/interfaces/libpq/libpq.a
+                $AR crs src/interfaces/libpq/libpq.a \
+                  $(find src/interfaces/libpq -maxdepth 1 -name '*.o' ! -name 'win32ver*')
+              '';
+            });
+            cjsonWin = pkgsWin.cjson.overrideAttrs (old: {
+              cmakeFlags = (old.cmakeFlags or [ ]) ++ [
+                "-DBUILD_SHARED_LIBS=OFF"
+                # mingw's isnan/isinf stolpert über cJSONs -Werror=float-conversion
+                "-DENABLE_CUSTOM_COMPILER_FLAGS=OFF"
+              ];
+            });
+          in
+          pkgsWin.stdenv.mkDerivation {
+            name = "kabai-windows";
+            version = "0.6.0";
+            src = ./.;
+
+            nativeBuildInputs = [ pkgsWin.buildPackages.pkg-config ];
+            buildInputs       = [ libpqWin cjsonWin opensslWin zlibWin pkgsWin.windows.pthreads ];
+
+            buildPhase = ''
+              $CC -o kabai.exe \
+                -I./src \
+                $(''${PKG_CONFIG:-pkg-config} --cflags libpq libcjson) \
+                src/main.c \
+                src/db/connection.c \
+                src/db/transaction.c \
+                src/mcp/mcp.c \
+                src/mcp/schema.c \
+                src/kanban/projects.c \
+                src/kanban/tickets.c \
+                src/kanban/comments.c \
+                src/kanban/board_statuses.c \
+                src/kanban/kanban_tools.c \
+                src/docs/docs_tools.c \
+                -static \
+                ${libpqWin.dev}/lib/libpq.a \
+                ${libpqWin.dev}/lib/libpgcommon.a \
+                ${libpqWin.dev}/lib/libpgport.a \
+                $(''${PKG_CONFIG:-pkg-config} --libs --static libcjson) \
+                -lssl -lcrypto -lz -lwinpthread \
+                -lshell32 -lws2_32 -lgdi32 -lcrypt32 -lbcrypt -lsecur32
+            '';
+
+            installPhase = ''
+              mkdir -p $out/bin
+              cp kabai.exe $out/bin/
+            '';
+          };
 
         apps.default = {
           type = "app";
