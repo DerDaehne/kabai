@@ -1,25 +1,31 @@
 ---
 name: kabai
-description: Binding usage rules for the kabai MCP server (kabai_* tools). Use whenever working with kabai tickets, kanban boards, projects, or the kabai knowledge base (notes/zettelkasten) — creating or picking up tickets, moving them through the workflow, writing or searching notes, linking notes to tickets. Ensures conventions (assignment, tasks, work log, note links) are followed without project-specific instructions.
+description: Binding usage rules for the kabai MCP server (kabai_* tools). Use whenever working with kabai tickets, kanban boards, projects, the kabai knowledge base (notes/zettelkasten), or the kabai planning canvas — creating or picking up tickets, moving them through the workflow, writing or searching notes, linking notes to tickets, planning on or reading a canvas. Ensures conventions (assignment, tasks, work log, note links, canvas alt-text) are followed without project-specific instructions.
 ---
 
 # kabai — how to use the kabai MCP server correctly
 
-kabai is a kanban board plus a knowledge base ("zettelkasten") in
-PostgreSQL, exposed as MCP tools. Two tool families:
+kabai is a kanban board plus a knowledge base ("zettelkasten") plus a
+cross-project planning canvas, all in PostgreSQL, exposed as MCP tools.
+Three tool families:
 
 - `kabai_*` — projects, board columns, workflow transitions, tickets,
   tasks (acceptance criteria), comments (work log), ticket relations.
 - `kabai_docs_*` — atomic knowledge notes with typed links, connected to
   tickets.
+- `kabai_canvas_*` / `kabai_*_canvas_element` / `kabai_*_canvas_edge` —
+  a whiteboard-like planning surface above epics (frames replace
+  milestones), co-edited by humans and agents.
 
-Mental model: **tickets are the record of work; notes are the record of
-knowledge.** Everything below is binding. Full rules with examples:
-[references/ticket-workflow.md](references/ticket-workflow.md) and
-[references/docs-zettelkasten.md](references/docs-zettelkasten.md) — read
-the relevant one before your first kabai action in a session. (If those
-relative links do not resolve in your environment, the two files live next
-to this one; they also work concatenated as plain instructions.)
+Mental model: **canvases are the record of planning; tickets are the
+record of work; notes are the record of knowledge.** Everything below is
+binding. Full rules with examples:
+[references/ticket-workflow.md](references/ticket-workflow.md),
+[references/docs-zettelkasten.md](references/docs-zettelkasten.md), and
+[references/canvas-planung.md](references/canvas-planung.md) — read the
+relevant one before your first kabai action in a session. (If those
+relative links do not resolve in your environment, the files live next to
+this one; they also work concatenated as plain instructions.)
 
 ## Rule zero — the MCP tools are the ONLY interface
 
@@ -107,6 +113,23 @@ and improvise.
    update the note at pickup or at the first design decision and link it
    immediately — never as a closing chore right before done.
 
+## Golden rules — canvas
+
+1. **Canvas is the planning record, not a ticket substitute.** Rough,
+   cross-project sketching goes on a canvas; committed, scoped work is a
+   ticket. Stable, reusable insight becomes a note. See
+   [references/canvas-planung.md](references/canvas-planung.md) §1/§7.
+2. **Search before creating a canvas** (`kabai_list_canvases`) — add to an
+   existing one instead of starting an orphan duplicate.
+3. **description (alt-text) is MANDATORY for `image`/`sketch` elements** —
+   `kabai_add_canvas_element`/`kabai_update_canvas_element` reject a
+   missing or cleared one. Multimodal agents that spot a missing/thin
+   description on read MUST fix it, not skip past it.
+4. **Frames replace milestones; no dedicated derivation tool.** Turn a
+   frame into an epic via `kabai_create_ticket(type:"epic")` plus a `ref`
+   element pointing back at the new epic — the frame stays as context.
+5. **Edges have free-text labels, no fixed taxonomy** — do not invent one.
+
 ## Efficiency
 
 - `summary: true` + `limit`/`offset` for all listings; `body_chars` tells
@@ -115,6 +138,8 @@ and improvise.
   `include_role_instruction: false` on repeat calls.
 - Discover knowledge entry points via
   `kabai_docs_list_notes(kind: "hub", summary: true)`.
+- `kabai_list_canvases` is the cheap overview; call `kabai_get_canvas`
+  only once you actually need the elements/edges.
 
 ## Anti-patterns (reviewers reject these)
 
@@ -124,4 +149,7 @@ skipping columns · stale descriptions · questions to humans without the
 human_intervention move · knowledge only in comments · duplicate
 tickets/notes · orphan notes · editing ADRs instead of superseding them ·
 epics closed without new/updated linked docs · notes written only as a
-closing chore before done · notes nobody ever verifies.
+closing chore before done · notes nobody ever verifies · orphan duplicate
+canvases · image/sketch elements without a real description · committed
+work left sitting as canvas text blocks instead of becoming tickets ·
+frames derived into epics without a `ref` element linking back.
