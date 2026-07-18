@@ -164,3 +164,20 @@ TLS-encrypted database connections (`sslmode=require` etc.) work without
 any additional installation. Configuration is identical on all platforms:
 set the `KABAI_*` environment variables in your MCP client config (see
 Quick start).
+
+## License
+
+Copyright © 2026 David Daehne.
+
+kabai is free software under the **GNU Affero General Public License v3.0**
+— see [LICENSE](LICENSE). You may use, modify, and deploy it freely,
+including commercially and inside your company. If you distribute modified
+versions, embed the code in your own product, or let users interact with a
+modified kabai over a network, the AGPL requires you to release that work
+under the AGPL as well.
+
+- **Using kabai commercially?** I'd appreciate it if you let me know by
+  [opening an issue](https://codeberg.org/danszek/kb.ai/issues) — a
+  friendly request, not a license condition.
+- **Closed-source embedding:** commercial licenses are available on
+  request — please [open an issue](https://codeberg.org/danszek/kb.ai/issues).
