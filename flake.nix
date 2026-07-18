@@ -36,6 +36,7 @@
               src/kanban/board_statuses.c \
               src/kanban/kanban_tools.c \
               src/docs/docs_tools.c \
+              src/attachments/attachment_tools.c \
               -L${pkgs.postgresql.lib}/lib \
               -L${pkgs.cjson}/lib \
               -lpq -lcjson -lm
@@ -132,6 +133,7 @@
                 src/kanban/board_statuses.c \
                 src/kanban/kanban_tools.c \
                 src/docs/docs_tools.c \
+                src/attachments/attachment_tools.c \
                 -static \
                 ${libpqWin.dev}/lib/libpq.a \
                 ${libpqWin.dev}/lib/libpgcommon.a \

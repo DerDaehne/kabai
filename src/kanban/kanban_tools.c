@@ -372,12 +372,45 @@ static cJSON *tool_get_ticket_detailed(McpContext *ctx, cJSON *id, cJSON *params
         if (nres) PQclear(nres);
     }
 
+    /* Attachment metadata (ticket #468) — never the binary data itself;
+     * fetch the image content via kabai_get_attachment on explicit need. */
+    cJSON *attachments_arr = cJSON_CreateArray();
+    {
+        char tid_str[32];
+        snprintf(tid_str, sizeof(tid_str), "%d", d->ticket->id);
+        const char *ap[1] = {tid_str};
+
+        PGresult *ares = PQexecParams(ctx->db->conn,
+            "SELECT a.id, a.filename, a.mime_type, a.size_bytes, a.description, "
+            "       a.uploaded_by, a.created_at::text "
+            "  FROM ticket_attachments ta JOIN attachments a ON a.id = ta.attachment_id "
+            " WHERE ta.ticket_id = $1 ORDER BY a.id",
+            1, NULL, ap, NULL, NULL, 0);
+        if (ares && PQresultStatus(ares) == PGRES_TUPLES_OK) {
+            for (int i = 0; i < PQntuples(ares); i++) {
+                cJSON *aj = cJSON_CreateObject();
+                cJSON_AddNumberToObject(aj, "id", atoi(PQgetvalue(ares, i, 0)));
+                cJSON_AddStringToObject(aj, "filename", PQgetvalue(ares, i, 1));
+                cJSON_AddStringToObject(aj, "mime_type", PQgetvalue(ares, i, 2));
+                cJSON_AddNumberToObject(aj, "size_bytes", atoi(PQgetvalue(ares, i, 3)));
+                if (!PQgetisnull(ares, i, 4))
+                    cJSON_AddStringToObject(aj, "description", PQgetvalue(ares, i, 4));
+                if (!PQgetisnull(ares, i, 5))
+                    cJSON_AddStringToObject(aj, "uploaded_by", PQgetvalue(ares, i, 5));
+                cJSON_AddStringToObject(aj, "created_at", PQgetvalue(ares, i, 6));
+                cJSON_AddItemToArray(attachments_arr, aj);
+            }
+        }
+        if (ares) PQclear(ares);
+    }
+
     cJSON *r = cJSON_CreateObject();
     cJSON_AddItemToObject(r, "ticket", ticket_j);
     cJSON_AddItemToObject(r, "tasks", tasks_arr);
     cJSON_AddItemToObject(r, "relations", relations_arr);
     cJSON_AddItemToObject(r, "comments", comments_arr);
     cJSON_AddItemToObject(r, "linked_notes", notes_arr);
+    cJSON_AddItemToObject(r, "attachments", attachments_arr);
 
     ticket_detailed_free(d);
     return mcp_tool_ok(id, r);
@@ -1028,10 +1061,13 @@ void kanban_register_tools(McpRegistry *r) {
         "Pass false after the first call to avoid repeating the same instruction for tickets in the same column.",
         false);
     mcp_registry_add(r, "kabai_get_ticket_detailed",
-        "Get ticket with all tasks (acceptance criteria), work log, timestamps, and "
+        "Get ticket with all tasks (acceptance criteria), work log, timestamps, "
         "linked knowledge-base notes (linked_notes — read them via kabai_docs_get_note "
-        "before starting work). Pass include_role_instruction:false on subsequent "
-        "calls within the same session to avoid redundant context.",
+        "before starting work), and attachments (image metadata incl. description — "
+        "the alt-text for non-multimodal agents; fetch the actual image via "
+        "kabai_get_attachment only when you need it, never automatically). Pass "
+        "include_role_instruction:false on subsequent calls within the same session "
+        "to avoid redundant context.",
         s, tool_get_ticket_detailed);
 
     s = schema_new();

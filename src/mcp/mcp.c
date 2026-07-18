@@ -116,8 +116,9 @@ cJSON *jsonrpc_error(cJSON *id, int code, const char *message) {
  * not via the JSON-RPC error field (which is reserved for protocol errors).
  * ============================================================================ */
 
-/* Success: serialise data as JSON into a text content block. Consumes data. */
-cJSON *mcp_tool_ok(cJSON *id, cJSON *data) {
+/* Builds the {"type":"text","text":...} block shared by mcp_tool_ok and
+ * mcp_tool_ok_with_image. Consumes data. */
+static cJSON *text_content_block(cJSON *data) {
     char *text = cJSON_PrintUnformatted(data);
     cJSON_Delete(data);
 
@@ -125,9 +126,34 @@ cJSON *mcp_tool_ok(cJSON *id, cJSON *data) {
     cJSON_AddStringToObject(item, "type", "text");
     cJSON_AddStringToObject(item, "text", text ? text : "{}");
     if (text) cJSON_free(text);
+    return item;
+}
 
+/* Success: serialise data as JSON into a text content block. Consumes data. */
+cJSON *mcp_tool_ok(cJSON *id, cJSON *data) {
     cJSON *content = cJSON_CreateArray();
-    cJSON_AddItemToArray(content, item);
+    cJSON_AddItemToArray(content, text_content_block(data));
+
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddItemToObject(result, "content", content);
+    cJSON_AddBoolToObject(result, "isError", 0);
+
+    return jsonrpc_result(id, result);
+}
+
+/* Success with a text block (metadata) followed by an image content block
+ * (MCP image content: {"type":"image","data":<base64>,"mimeType":...}).
+ * Consumes data; base64_data/mime_type are borrowed. */
+cJSON *mcp_tool_ok_with_image(cJSON *id, cJSON *data, const char *base64_data,
+                              const char *mime_type) {
+    cJSON *content = cJSON_CreateArray();
+    cJSON_AddItemToArray(content, text_content_block(data));
+
+    cJSON *image = cJSON_CreateObject();
+    cJSON_AddStringToObject(image, "type", "image");
+    cJSON_AddStringToObject(image, "data", base64_data ? base64_data : "");
+    cJSON_AddStringToObject(image, "mimeType", mime_type ? mime_type : "application/octet-stream");
+    cJSON_AddItemToArray(content, image);
 
     cJSON *result = cJSON_CreateObject();
     cJSON_AddItemToObject(result, "content", content);

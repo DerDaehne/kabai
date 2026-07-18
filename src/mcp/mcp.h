@@ -51,6 +51,15 @@ cJSON *jsonrpc_error(cJSON *id, int code, const char *message);
 cJSON *mcp_tool_ok(cJSON *id, cJSON *data);
 cJSON *mcp_tool_err(cJSON *id, const char *message);
 
+/* Success with an extra image content block appended after the text block
+ * (metadata as JSON text, same as mcp_tool_ok, plus
+ * {"type":"image","data":<base64>,"mimeType":mime_type}). Consumes data.
+ * base64_data is borrowed (copied into the block). For tools that must
+ * return actual image bytes (kabai_get_attachment) — existing text-only
+ * tools are unaffected, they keep calling mcp_tool_ok. */
+cJSON *mcp_tool_ok_with_image(cJSON *id, cJSON *data, const char *base64_data,
+                              const char *mime_type);
+
 typedef struct McpServerInfo {
     const char *name;
     const char *version;
