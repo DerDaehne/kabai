@@ -12,14 +12,14 @@ install them alongside the server (see [Agent skill](#agent-skill-required-for-g
 ## Installation
 
 ```bash
-nix profile install git+https://codeberg.org/danszek/kb.ai.git
+nix profile install git+https://github.com/DerDaehne/kabai.git
 ```
 
 Or build from source:
 
 ```bash
-git clone https://codeberg.org/danszek/kb.ai.git
-cd kb.ai
+git clone https://github.com/DerDaehne/kabai.git
+cd kabai
 nix build             # dynamically linked
 nix build .#static    # statically linked release binary
 ```
@@ -33,7 +33,7 @@ per session; the only long-running component is PostgreSQL.
 
 kabai expects a PostgreSQL (14+) database with the schema applied. The
 recommended way to set it up — and to get a human-friendly board view —
-is the sister project **[Kabai UI](https://codeberg.org/danszek/kbai-ui)**,
+is the sister project **[Kabai UI](https://github.com/DerDaehne/kabai-ui)**,
 which runs the schema migrations for you.
 
 Developers working on kabai itself can apply the plain-SQL migrations

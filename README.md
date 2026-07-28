@@ -1,7 +1,5 @@
 # kabai - MCP Server
 
-[![CI](https://codeberg.org/danszek/kb.ai/actions/workflows/build.yml/badge.svg)](https://codeberg.org/danszek/kb.ai/actions)
-
 > **Database-driven kanban board + knowledge base for agentic AI workflows**
 
 `kabai` is an **MCP server** written in C that exposes kanban operations and
@@ -33,7 +31,7 @@ the backend and the source of truth; builds use **Nix flakes**.
 ### 1. Install the binary
 
 ```bash
-nix profile install git+https://codeberg.org/danszek/kb.ai.git
+nix profile install git+https://github.com/DerDaehne/kabai.git
 ```
 
 (For development instead: `git clone`, then `nix develop` for the dev
@@ -43,7 +41,7 @@ shell, `nix build` for a dynamically linked Linux build, or
 ### 2. Set up the database
 
 kabai needs a PostgreSQL database with the schema applied. Use the sister
-project **[Kabai UI](https://codeberg.org/danszek/kbai-ui)** to run the
+project **[Kabai UI](https://github.com/DerDaehne/kabai-ui)** to run the
 schema migrations (and to get a human-friendly board view on top).
 
 Developers working on kabai itself can apply the plain-SQL migrations
@@ -177,7 +175,7 @@ modified kabai over a network, the AGPL requires you to release that work
 under the AGPL as well.
 
 - **Using kabai commercially?** I'd appreciate it if you let me know by
-  [opening an issue](https://codeberg.org/danszek/kb.ai/issues) — a
+  [opening an issue](https://github.com/DerDaehne/kabai/issues) — a
   friendly request, not a license condition.
 - **Closed-source embedding:** commercial licenses are available on
-  request — please [open an issue](https://codeberg.org/danszek/kb.ai/issues).
+  request — please [open an issue](https://github.com/DerDaehne/kabai/issues).
