@@ -9,16 +9,16 @@ on:
 
 jobs:
   build:
-    runs-on: ci
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Nix
-        uses: https://github.com/DeterminateSystems/nix-installer-action@v14
+        uses: DeterminateSystems/nix-installer-action@v14
 
       - name: Enable Nix cache (magic-nix-cache)
-        uses: https://github.com/DeterminateSystems/magic-nix-cache-action@v8
+        uses: DeterminateSystems/magic-nix-cache-action@v8
 
       - name: Build
         run: nix build . --print-build-logs
@@ -27,32 +27,34 @@ jobs:
         run: nix build .#windows -o result-windows --print-build-logs
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: kbai-linux
           path: ./result/bin/kbai
           retention-days: 7
 
       - name: Upload artifact (Windows)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: kbai-windows
           path: ./result-windows/bin/kabai.exe
           retention-days: 7
 
   release:
-    runs-on: ci
+    runs-on: ubuntu-latest
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Nix
-        uses: https://github.com/DeterminateSystems/nix-installer-action@v14
+        uses: DeterminateSystems/nix-installer-action@v14
 
       - name: Enable Nix cache (magic-nix-cache)
-        uses: https://github.com/DeterminateSystems/magic-nix-cache-action@v8
+        uses: DeterminateSystems/magic-nix-cache-action@v8
 
       - name: Build release binary
         run: nix build . --print-build-logs
@@ -67,10 +69,7 @@ jobs:
           cp result-windows/bin/kabai.exe release-dir/kabai-windows-x86_64.exe
 
       - name: Publish release
-        uses: actions/forgejo-release@v2.5.0
+        uses: softprops/action-gh-release@v2
         with:
-          direction: upload
-          token: ${{ secrets.GITHUB_TOKEN }}
-          release-dir: ./release-dir/
-          release-notes-assistant: true
-          override: true
+          files: release-dir/*
+          generate_release_notes: true

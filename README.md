@@ -1,5 +1,7 @@
 # kabai - MCP Server
 
+[![CI](https://github.com/DerDaehne/kabai/actions/workflows/build.yml/badge.svg)](https://github.com/DerDaehne/kabai/actions)
+
 > **Database-driven kanban board + knowledge base for agentic AI workflows**
 
 `kabai` is an **MCP server** written in C that exposes kanban operations and
@@ -164,8 +166,6 @@ set the `KABAI_*` environment variables in your MCP client config (see
 Quick start).
 
 ## License
-
-Copyright © 2026 David Daehne.
 
 kabai is free software under the **GNU Affero General Public License v3.0**
 — see [LICENSE](LICENSE). You may use, modify, and deploy it freely,
