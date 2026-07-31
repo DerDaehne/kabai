@@ -51,6 +51,13 @@ bool param_num(cJSON *params, const char *name, int *out) {
     return true;
 }
 
+bool param_double(cJSON *params, const char *name, double *out) {
+    cJSON *j = cJSON_GetObjectItemCaseSensitive(params, name);
+    if (!cJSON_IsNumber(j)) return false;
+    *out = j->valuedouble;
+    return true;
+}
+
 const char *param_str(cJSON *params, const char *name) {
     cJSON *j = cJSON_GetObjectItemCaseSensitive(params, name);
     return cJSON_IsString(j) ? j->valuestring : NULL;

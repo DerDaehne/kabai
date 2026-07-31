@@ -193,6 +193,12 @@ static cJSON *tool_list_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
             cJSON_AddStringToObject(o, "description", tickets[i]->description);
         if (tickets[i]->assignee)
             cJSON_AddStringToObject(o, "assignee", tickets[i]->assignee);
+        if (tickets[i]->effort_estimate)
+            cJSON_AddNumberToObject(o, "effort_estimate", atof(tickets[i]->effort_estimate));
+        if (tickets[i]->effort_actual)
+            cJSON_AddNumberToObject(o, "effort_actual", atof(tickets[i]->effort_actual));
+        if (tickets[i]->effort_unit)
+            cJSON_AddStringToObject(o, "effort_unit", tickets[i]->effort_unit);
         if (tickets[i]->created_at)
             cJSON_AddStringToObject(o, "created_at", tickets[i]->created_at);
         if (tickets[i]->updated_at)
@@ -224,6 +230,12 @@ static cJSON *tool_search_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
             cJSON_AddStringToObject(o, "description", tickets[i]->description);
         if (tickets[i]->assignee)
             cJSON_AddStringToObject(o, "assignee", tickets[i]->assignee);
+        if (tickets[i]->effort_estimate)
+            cJSON_AddNumberToObject(o, "effort_estimate", atof(tickets[i]->effort_estimate));
+        if (tickets[i]->effort_actual)
+            cJSON_AddNumberToObject(o, "effort_actual", atof(tickets[i]->effort_actual));
+        if (tickets[i]->effort_unit)
+            cJSON_AddStringToObject(o, "effort_unit", tickets[i]->effort_unit);
         if (tickets[i]->created_at)
             cJSON_AddStringToObject(o, "created_at", tickets[i]->created_at);
         cJSON_AddItemToArray(arr, o);
@@ -250,6 +262,9 @@ static cJSON *tool_get_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     if (t->description) cJSON_AddStringToObject(r, "description", t->description);
     if (t->assignee)    cJSON_AddStringToObject(r, "assignee", t->assignee);
     if (t->model)       cJSON_AddStringToObject(r, "model", t->model);
+    if (t->effort_estimate) cJSON_AddNumberToObject(r, "effort_estimate", atof(t->effort_estimate));
+    if (t->effort_actual)   cJSON_AddNumberToObject(r, "effort_actual", atof(t->effort_actual));
+    if (t->effort_unit)     cJSON_AddStringToObject(r, "effort_unit", t->effort_unit);
     if (t->created_at)  cJSON_AddStringToObject(r, "created_at", t->created_at);
     if (t->updated_at)  cJSON_AddStringToObject(r, "updated_at", t->updated_at);
     if (t->agent_role_instruction)
@@ -286,6 +301,12 @@ static cJSON *tool_get_ticket_detailed(McpContext *ctx, cJSON *id, cJSON *params
         cJSON_AddStringToObject(ticket_j, "assignee", d->ticket->assignee);
     if (d->ticket->model)
         cJSON_AddStringToObject(ticket_j, "model", d->ticket->model);
+    if (d->ticket->effort_estimate)
+        cJSON_AddNumberToObject(ticket_j, "effort_estimate", atof(d->ticket->effort_estimate));
+    if (d->ticket->effort_actual)
+        cJSON_AddNumberToObject(ticket_j, "effort_actual", atof(d->ticket->effort_actual));
+    if (d->ticket->effort_unit)
+        cJSON_AddStringToObject(ticket_j, "effort_unit", d->ticket->effort_unit);
     if (d->ticket->created_at)
         cJSON_AddStringToObject(ticket_j, "created_at", d->ticket->created_at);
     if (d->ticket->updated_at)
@@ -559,8 +580,40 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         if (dres) PQclear(dres);
     }
 
+    if (param_present(params, "effort_estimate")) {
+        provided++;
+        double v;
+        const char *estr = NULL;
+        char buf[64];
+        if (!param_is_null(params, "effort_estimate") && param_double(params, "effort_estimate", &v)) {
+            snprintf(buf, sizeof(buf), "%g", v);
+            estr = buf;
+        }
+        updated += ticket_update_effort_estimate(ctx->db, ticket_id, estr);
+    }
+
+    if (param_present(params, "effort_actual")) {
+        provided++;
+        double v;
+        const char *astr = NULL;
+        char buf[64];
+        if (!param_is_null(params, "effort_actual") && param_double(params, "effort_actual", &v)) {
+            snprintf(buf, sizeof(buf), "%g", v);
+            astr = buf;
+        }
+        updated += ticket_update_effort_actual(ctx->db, ticket_id, astr);
+    }
+
+    if (param_present(params, "effort_unit")) {
+        provided++;
+        const char *unit = param_is_null(params, "effort_unit")
+                          ? NULL : param_str(params, "effort_unit");
+        updated += ticket_update_effort_unit(ctx->db, ticket_id, unit);
+    }
+
     if (!provided)
-        return mcp_tool_err(id, "No updatable fields provided (title, description, docs_required)");
+        return mcp_tool_err(id, "No updatable fields provided (title, description, docs_required, "
+                                 "effort_estimate, effort_actual, effort_unit)");
     if (!updated)
         return mcp_tool_err(id, "Ticket not found");
 
@@ -1105,8 +1158,21 @@ void kanban_register_tools(McpRegistry *r) {
         "Require a linked knowledge-base note before the ticket can close (optional). "
         "When unsetting it, leave a work-log comment justifying why no docs are needed.",
         false);
+    schema_num(s, "effort_estimate",
+        "Estimated effort, or null to clear (optional). Unit-agnostic — pair with effort_unit.",
+        false);
+    schema_num(s, "effort_actual",
+        "Actual effort spent, or null to clear (optional). Unit-agnostic — pair with effort_unit.",
+        false);
+    schema_str(s, "effort_unit",
+        "Free-text unit for effort_estimate/effort_actual (e.g. days, story points, tokens), "
+        "or null to clear (optional).",
+        false);
     mcp_registry_add(r, "kabai_update_ticket",
-        "Edit a ticket's title, description, and/or docs_required flag", s, tool_update_ticket);
+        "Edit a ticket's title, description, docs_required flag, and/or effort tracking "
+        "(effort_estimate/effort_actual/effort_unit — generic, unit-agnostic; MCP has no "
+        "protocol-level usage/cost data to fill this automatically)",
+        s, tool_update_ticket);
 
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);

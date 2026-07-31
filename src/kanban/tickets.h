@@ -16,6 +16,12 @@ typedef struct {
     char *description;
     char *assignee;
     char *model;
+    /* Generic effort tracking (Codeberg kbai-ui#16) — numeric-as-text like
+     * other Postgres numeric columns read via libpq's text format; unit is
+     * free text (days, story points, tokens, ...), not an enum. */
+    char *effort_estimate;
+    char *effort_actual;
+    char *effort_unit;
     char *created_at;
     char *updated_at;
     /* Populated by ticket_get_by_id (via JOIN); NULL in list results */
@@ -146,6 +152,16 @@ int ticket_update_title(DatabaseConnection *db, int ticket_id, const char *new_t
  * @return 1 on success, 0 on failure
  */
 int ticket_update_description(DatabaseConnection *db, int ticket_id, const char *new_description);
+
+/**
+ * @brief Update effort estimate/actual/unit (NULL clears the field)
+ * @param db Database connection
+ * @param ticket_id Ticket ID
+ * @return 1 on success, 0 on failure
+ */
+int ticket_update_effort_estimate(DatabaseConnection *db, int ticket_id, const char *estimate);
+int ticket_update_effort_actual(DatabaseConnection *db, int ticket_id, const char *actual);
+int ticket_update_effort_unit(DatabaseConnection *db, int ticket_id, const char *unit);
 
 /**
  * @brief Get detailed ticket with tasks and comments (work log)

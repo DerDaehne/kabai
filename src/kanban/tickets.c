@@ -90,6 +90,9 @@ Ticket *ticket_create(
     t->description            = description ? strdup(description) : NULL;
     t->assignee               = NULL;
     t->model                  = NULL;
+    t->effort_estimate        = NULL;
+    t->effort_actual          = NULL;
+    t->effort_unit            = NULL;
     t->created_at             = NULL;
     t->updated_at             = NULL;
     t->status_name            = NULL;
@@ -108,7 +111,8 @@ Ticket *ticket_get_by_id(DatabaseConnection *db, int ticket_id) {
     PGresult *res = PQexecParams(db->conn,
         "SELECT t.id, t.project_id, t.status_id, t.type, t.title, t.description,"
         "       t.assignee, t.model, t.created_at::text, t.updated_at::text,"
-        "       bs.name, bs.agent_role_instruction"
+        "       bs.name, bs.agent_role_instruction,"
+        "       t.effort_estimate::text, t.effort_actual::text, t.effort_unit"
         " FROM tickets t"
         " JOIN board_statuses bs ON bs.id = t.status_id"
         " WHERE t.id = $1",
@@ -151,11 +155,21 @@ Ticket *ticket_get_by_id(DatabaseConnection *db, int ticket_id) {
     const char *ari = PQgetvalue(res, 0, 11);
     t->agent_role_instruction = (ari && *ari) ? strdup(ari) : NULL;
 
+    const char *eest = PQgetvalue(res, 0, 12);
+    t->effort_estimate = (eest && *eest) ? strdup(eest) : NULL;
+
+    const char *eact = PQgetvalue(res, 0, 13);
+    t->effort_actual = (eact && *eact) ? strdup(eact) : NULL;
+
+    const char *eunit = PQgetvalue(res, 0, 14);
+    t->effort_unit = (eunit && *eunit) ? strdup(eunit) : NULL;
+
     PQclear(res);
     return t;
 }
 
-/* Columns: id(0) project_id(1) status_id(2) type(3) title(4) description(5) assignee(6) created_at(7) updated_at(8) */
+/* Columns: id(0) project_id(1) status_id(2) type(3) title(4) description(5) assignee(6) created_at(7) updated_at(8)
+ * effort_estimate(9) effort_actual(10) effort_unit(11) */
 static Ticket **parse_ticket_rows(PGresult *res) {
     int count = PQntuples(res);
     Ticket **tickets = calloc(count + 1, sizeof(Ticket *));
@@ -189,6 +203,15 @@ static Ticket **parse_ticket_rows(PGresult *res) {
         const char *uat = PQgetvalue(res, i, 8);
         tickets[i]->updated_at = (uat && *uat) ? strdup(uat) : NULL;
 
+        const char *eest = PQgetvalue(res, i, 9);
+        tickets[i]->effort_estimate = (eest && *eest) ? strdup(eest) : NULL;
+
+        const char *eact = PQgetvalue(res, i, 10);
+        tickets[i]->effort_actual = (eact && *eact) ? strdup(eact) : NULL;
+
+        const char *eunit = PQgetvalue(res, i, 11);
+        tickets[i]->effort_unit = (eunit && *eunit) ? strdup(eunit) : NULL;
+
         tickets[i]->model                  = NULL;
         tickets[i]->status_name            = NULL;
         tickets[i]->agent_role_instruction = NULL;
@@ -214,7 +237,8 @@ Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status
 
     int qpos = snprintf(query, sizeof(query),
         "SELECT id, project_id, status_id, type, title, description, assignee,"
-        " created_at::text, updated_at::text"
+        " created_at::text, updated_at::text,"
+        " effort_estimate::text, effort_actual::text, effort_unit"
         " FROM tickets WHERE project_id = $1");
 
     if (status_id > 0) {
@@ -271,7 +295,8 @@ Ticket **ticket_search(DatabaseConnection *db, int project_id, const char *query
     const char *p[2] = {proj_str, pattern};
     PGresult *res = PQexecParams(db->conn,
         "SELECT id, project_id, status_id, type, title, description, assignee,"
-        "       created_at::text, updated_at::text"
+        "       created_at::text, updated_at::text,"
+        "       effort_estimate::text, effort_actual::text, effort_unit"
         " FROM tickets WHERE project_id = $1"
         "   AND (title ILIKE $2 OR description ILIKE $2)"
         " ORDER BY created_at LIMIT 50",
@@ -410,6 +435,93 @@ int ticket_update_description(DatabaseConnection *db, int ticket_id, const char 
     return affected > 0;
 }
 
+int ticket_update_effort_estimate(DatabaseConnection *db, int ticket_id, const char *estimate) {
+    if (!db) return 0;
+
+    char id_str[32];
+    snprintf(id_str, sizeof(id_str), "%d", ticket_id);
+
+    PGresult *res;
+    if (estimate) {
+        const char *params[2] = {estimate, id_str};
+        res = PQexecParams(db->conn,
+            "UPDATE tickets SET effort_estimate = $1::numeric, updated_at = NOW() WHERE id = $2",
+            2, NULL, params, NULL, NULL, 0);
+    } else {
+        const char *params[1] = {id_str};
+        res = PQexecParams(db->conn,
+            "UPDATE tickets SET effort_estimate = NULL, updated_at = NOW() WHERE id = $1",
+            1, NULL, params, NULL, NULL, 0);
+    }
+
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        if (res) PQclear(res);
+        return 0;
+    }
+
+    int affected = atoi(PQcmdTuples(res));
+    PQclear(res);
+    return affected > 0;
+}
+
+int ticket_update_effort_actual(DatabaseConnection *db, int ticket_id, const char *actual) {
+    if (!db) return 0;
+
+    char id_str[32];
+    snprintf(id_str, sizeof(id_str), "%d", ticket_id);
+
+    PGresult *res;
+    if (actual) {
+        const char *params[2] = {actual, id_str};
+        res = PQexecParams(db->conn,
+            "UPDATE tickets SET effort_actual = $1::numeric, updated_at = NOW() WHERE id = $2",
+            2, NULL, params, NULL, NULL, 0);
+    } else {
+        const char *params[1] = {id_str};
+        res = PQexecParams(db->conn,
+            "UPDATE tickets SET effort_actual = NULL, updated_at = NOW() WHERE id = $1",
+            1, NULL, params, NULL, NULL, 0);
+    }
+
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        if (res) PQclear(res);
+        return 0;
+    }
+
+    int affected = atoi(PQcmdTuples(res));
+    PQclear(res);
+    return affected > 0;
+}
+
+int ticket_update_effort_unit(DatabaseConnection *db, int ticket_id, const char *unit) {
+    if (!db) return 0;
+
+    char id_str[32];
+    snprintf(id_str, sizeof(id_str), "%d", ticket_id);
+
+    PGresult *res;
+    if (unit) {
+        const char *params[2] = {unit, id_str};
+        res = PQexecParams(db->conn,
+            "UPDATE tickets SET effort_unit = $1, updated_at = NOW() WHERE id = $2",
+            2, NULL, params, NULL, NULL, 0);
+    } else {
+        const char *params[1] = {id_str};
+        res = PQexecParams(db->conn,
+            "UPDATE tickets SET effort_unit = NULL, updated_at = NOW() WHERE id = $1",
+            1, NULL, params, NULL, NULL, 0);
+    }
+
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        if (res) PQclear(res);
+        return 0;
+    }
+
+    int affected = atoi(PQcmdTuples(res));
+    PQclear(res);
+    return affected > 0;
+}
+
 /* ============================================================================
  * Tasks
  * ============================================================================ */
@@ -517,6 +629,9 @@ void ticket_free(Ticket *t) {
     free(t->description);
     free(t->assignee);
     free(t->model);
+    free(t->effort_estimate);
+    free(t->effort_actual);
+    free(t->effort_unit);
     free(t->created_at);
     free(t->updated_at);
     free(t->status_name);

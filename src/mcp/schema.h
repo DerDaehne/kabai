@@ -23,6 +23,7 @@ void schema_num_array(cJSON *s, const char *name, const char *desc, bool require
 
 /* false / NULL when the parameter is absent or has the wrong type. */
 bool        param_num (cJSON *params, const char *name, int *out);
+bool        param_double(cJSON *params, const char *name, double *out);
 const char *param_str (cJSON *params, const char *name);
 bool        param_bool(cJSON *params, const char *name, bool dflt);
 /* Present with explicit JSON null (e.g. update_ticket description:null). */
