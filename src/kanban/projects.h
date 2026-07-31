@@ -1,6 +1,7 @@
 #ifndef KANBAN_PROJECTS_H
 #define KANBAN_PROJECTS_H
 
+#include <stdbool.h>
 #include "db/connection.h"
 
 /**
@@ -11,6 +12,9 @@ typedef struct {
     char *slug;
     char *name;
     char *description;
+    /* Archiving (kbai-ui Codeberg#7, Kanban AI #502) — set only by a human
+     * via kbai-ui's own UPDATE, never by an MCP tool. */
+    bool archived;
 } Project;
 
 /**
@@ -37,11 +41,12 @@ Project* project_create(
 Project* project_get_by_id(DatabaseConnection *db, int project_id);
 
 /**
- * @brief List all projects
+ * @brief List projects
  * @param db Database connection
+ * @param include_archived If false (default tool behavior), archived projects are excluded
  * @return Array of Project* (NULL-terminated)
  */
-Project** project_list_all(DatabaseConnection *db);
+Project** project_list_all(DatabaseConnection *db, bool include_archived);
 
 /**
  * @brief Free project memory

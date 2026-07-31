@@ -44,6 +44,7 @@ Project *project_create(
     p->slug        = strdup(slug);
     p->name        = strdup(name);
     p->description = description ? strdup(description) : NULL;
+    p->archived    = false;
     return p;
 }
 
@@ -55,7 +56,7 @@ Project *project_get_by_id(DatabaseConnection *db, int project_id) {
     const char *params[1] = {id_str};
 
     PGresult *res = PQexecParams(db->conn,
-        "SELECT id, slug, name, description FROM projects WHERE id = $1",
+        "SELECT id, slug, name, description, archived FROM projects WHERE id = $1",
         1, NULL, params, NULL, NULL, 0);
 
     if (!res || PQntuples(res) == 0) {
@@ -71,16 +72,18 @@ Project *project_get_by_id(DatabaseConnection *db, int project_id) {
     p->name = strdup(PQgetvalue(res, 0, 2));
     const char *desc = PQgetvalue(res, 0, 3);
     p->description = (desc && *desc) ? strdup(desc) : NULL;
+    p->archived = PQgetvalue(res, 0, 4)[0] == 't';
 
     PQclear(res);
     return p;
 }
 
-Project **project_list_all(DatabaseConnection *db) {
+Project **project_list_all(DatabaseConnection *db, bool include_archived) {
     if (!db) return NULL;
 
-    PGresult *res = PQexec(db->conn,
-        "SELECT id, slug, name, description FROM projects ORDER BY created_at");
+    PGresult *res = PQexec(db->conn, include_archived
+        ? "SELECT id, slug, name, description, archived FROM projects ORDER BY created_at"
+        : "SELECT id, slug, name, description, archived FROM projects WHERE NOT archived ORDER BY created_at");
 
     if (!res || PQntuples(res) == 0) {
         if (res) PQclear(res);
@@ -103,6 +106,7 @@ Project **project_list_all(DatabaseConnection *db) {
         projects[i]->name = strdup(PQgetvalue(res, i, 2));
         const char *desc = PQgetvalue(res, i, 3);
         projects[i]->description = (desc && *desc) ? strdup(desc) : NULL;
+        projects[i]->archived = PQgetvalue(res, i, 4)[0] == 't';
     }
 
     projects[count] = NULL;

@@ -38,6 +38,16 @@ static const char *docs_db_error(PGresult *res) {
     }
     if (state && strcmp(state, "23503") == 0)    /* foreign_key_violation */
         return "Referenced note, ticket, or project does not exist";
+    if (state && strcmp(state, "P0001") == 0) {  /* trigger RAISE */
+        /* Callers PQclear(res) right after this returns, so the message must
+         * be copied out of res's buffer here rather than pointed into it. */
+        static char buf[600];
+        const char *primary = res ? PQresultErrorField(res, PG_DIAG_MESSAGE_PRIMARY) : NULL;
+        if (primary) {
+            snprintf(buf, sizeof(buf), "%s", primary);
+            return buf;
+        }
+    }
     return NULL;
 }
 
@@ -617,9 +627,10 @@ static cJSON *tool_docs_unlink_ticket(McpContext *ctx, cJSON *id, cJSON *params)
 
     int deleted = (res && PQresultStatus(res) == PGRES_COMMAND_OK)
                 ? atoi(PQcmdTuples(res)) : 0;
+    const char *msg = deleted ? NULL : docs_db_error(res);
     if (res) PQclear(res);
     if (!deleted)
-        return mcp_tool_err(id, "Link not found or could not be deleted");
+        return mcp_tool_err(id, msg ? msg : "Link not found or could not be deleted");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);

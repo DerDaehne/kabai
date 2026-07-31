@@ -80,13 +80,14 @@ static cJSON *tool_create_project(McpContext *ctx, cJSON *id, cJSON *params) {
     cJSON_AddStringToObject(r, "slug", p->slug);
     cJSON_AddStringToObject(r, "name", p->name);
     if (p->description) cJSON_AddStringToObject(r, "description", p->description);
+    cJSON_AddBoolToObject(r, "archived", p->archived);
     project_free(p);
     return mcp_tool_ok(id, r);
 }
 
 static cJSON *tool_list_projects(McpContext *ctx, cJSON *id, cJSON *params) {
-    (void)params;
-    Project **projects = project_list_all(ctx->db);
+    bool include_archived = param_bool(params, "include_archived", false);
+    Project **projects = project_list_all(ctx->db, include_archived);
     cJSON *arr = cJSON_CreateArray();
     if (!projects) return mcp_tool_ok(id, arr);
 
@@ -97,6 +98,7 @@ static cJSON *tool_list_projects(McpContext *ctx, cJSON *id, cJSON *params) {
         cJSON_AddStringToObject(o, "name", projects[i]->name);
         if (projects[i]->description)
             cJSON_AddStringToObject(o, "description", projects[i]->description);
+        cJSON_AddBoolToObject(o, "archived", projects[i]->archived);
         cJSON_AddItemToArray(arr, o);
     }
     project_free_array(projects);
@@ -116,6 +118,7 @@ static cJSON *tool_get_project(McpContext *ctx, cJSON *id, cJSON *params) {
     cJSON_AddStringToObject(r, "slug", p->slug);
     cJSON_AddStringToObject(r, "name", p->name);
     if (p->description) cJSON_AddStringToObject(r, "description", p->description);
+    cJSON_AddBoolToObject(r, "archived", p->archived);
     project_free(p);
     return mcp_tool_ok(id, r);
 }
@@ -446,6 +449,8 @@ static cJSON *tool_move_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     if (!ticket_update_status(ctx->db, ticket_id, new_status_id)) {
         /* Read error BEFORE any subsequent query clobbers it */
         const char *raw = PQerrorMessage(ctx->db->conn);
+        if (raw && strstr(raw, "is archived and read-only"))
+            return mcp_tool_err(id, ctx->db->last_primary[0] ? ctx->db->last_primary : "Project is archived and read-only");
         if (raw && strstr(raw, "Illegaler Kanban-Move"))
             return mcp_tool_err(id, "Invalid ticket transition: check workflow rules");
         if (raw && strstr(raw, "Akzeptanzkriterium"))
@@ -493,7 +498,9 @@ static cJSON *tool_move_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
         } else {
             cJSON_AddBoolToObject(entry, "success", 0);
             const char *raw = PQerrorMessage(ctx->db->conn);
-            if (raw && strstr(raw, "Illegaler Kanban-Move"))
+            if (raw && strstr(raw, "is archived and read-only"))
+                cJSON_AddStringToObject(entry, "error", "Project is archived and read-only");
+            else if (raw && strstr(raw, "Illegaler Kanban-Move"))
                 cJSON_AddStringToObject(entry, "error", "Invalid transition");
             else if (raw && strstr(raw, "Akzeptanzkriterium"))
                 cJSON_AddStringToObject(entry, "error", "Open acceptance criteria remain");
@@ -531,7 +538,9 @@ static cJSON *tool_assign_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
             "recommended for tracking which model worked the ticket)");
 
     if (!ticket_assign(ctx->db, ticket_id, assignee, ctx->agent_model))
-        return mcp_tool_err(id, "Ticket not found (or assign failed)");
+        return ctx->db->last_primary[0]
+            ? kanban_db_error(ctx, id, "Failed to assign ticket")
+            : mcp_tool_err(id, "Ticket not found (or assign failed)");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
@@ -619,7 +628,9 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         return mcp_tool_err(id, "No updatable fields provided (title, description, docs_required, "
                                  "effort_estimate, effort_actual, effort_unit)");
     if (!updated)
-        return mcp_tool_err(id, "Ticket not found");
+        return ctx->db->last_primary[0]
+            ? kanban_db_error(ctx, id, "Failed to update ticket")
+            : mcp_tool_err(id, "Ticket not found");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
@@ -641,7 +652,9 @@ static cJSON *tool_delete_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     ticket_free(t);
 
     if (!ticket_delete(ctx->db, ticket_id))
-        return mcp_tool_err(id, "Failed to delete ticket");
+        return ctx->db->last_primary[0]
+            ? kanban_db_error(ctx, id, "Failed to delete ticket")
+            : mcp_tool_err(id, "Failed to delete ticket");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
@@ -687,7 +700,9 @@ static cJSON *tool_unlink_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
             "Missing required parameters: from_ticket_id, to_ticket_id, relation_type");
 
     if (!ticket_unlink(ctx->db, from_id, to_id, rel))
-        return mcp_tool_err(id, "Relation not found or could not be deleted");
+        return ctx->db->last_primary[0]
+            ? kanban_db_error(ctx, id, "Failed to delete relation")
+            : mcp_tool_err(id, "Relation not found or could not be deleted");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
@@ -723,7 +738,9 @@ static cJSON *tool_complete_task(McpContext *ctx, cJSON *id, cJSON *params) {
         return mcp_tool_err(id, "Missing required parameter: task_id");
 
     if (!ticket_complete_task(ctx->db, task_id))
-        return mcp_tool_err(id, "Task not found (or update failed)");
+        return ctx->db->last_primary[0]
+            ? kanban_db_error(ctx, id, "Failed to complete task")
+            : mcp_tool_err(id, "Task not found (or update failed)");
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
@@ -984,8 +1001,11 @@ static cJSON *tool_update_task(McpContext *ctx, cJSON *id, cJSON *params) {
         2, NULL, q_params, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        db_capture_error(ctx->db, res);
         if (res) PQclear(res);
-        return mcp_tool_err(id, "Task not found");
+        return ctx->db->last_primary[0]
+            ? kanban_db_error(ctx, id, "Failed to update task")
+            : mcp_tool_err(id, "Task not found");
     }
 
     cJSON *r = cJSON_CreateObject();
@@ -1013,8 +1033,11 @@ static cJSON *tool_delete_task(McpContext *ctx, cJSON *id, cJSON *params) {
         1, NULL, q_params, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        db_capture_error(ctx->db, res);
         if (res) PQclear(res);
-        return mcp_tool_err(id, "Task not found");
+        return ctx->db->last_primary[0]
+            ? kanban_db_error(ctx, id, "Failed to delete task")
+            : mcp_tool_err(id, "Task not found");
     }
 
     int ticket_id = atoi(PQgetvalue(res, 0, 0));
@@ -1060,8 +1083,12 @@ void kanban_register_tools(McpRegistry *r) {
         "Create a new project/board", s, tool_create_project);
 
     s = schema_new();
+    schema_bool(s, "include_archived",
+        "Include archived projects (default false — archived projects are hidden by default; "
+        "a human reactivates them in the UI, no MCP tool does this).", false);
     mcp_registry_add(r, "kabai_list_projects",
-        "List all projects", s, tool_list_projects);
+        "List projects. Archived projects are excluded by default (include_archived:true to see them).",
+        s, tool_list_projects);
 
     s = schema_new();
     schema_num(s, "project_id", "Numeric project ID", true);

@@ -312,6 +312,7 @@ Ticket **ticket_search(DatabaseConnection *db, int project_id, const char *query
 
 int ticket_delete(DatabaseConnection *db, int ticket_id) {
     if (!db) return 0;
+    db_clear_error(db);
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
@@ -322,6 +323,7 @@ int ticket_delete(DatabaseConnection *db, int ticket_id) {
         1, NULL, p, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
@@ -332,6 +334,7 @@ int ticket_delete(DatabaseConnection *db, int ticket_id) {
 
 int ticket_update_status(DatabaseConnection *db, int ticket_id, int new_status_id) {
     if (!db) return 0;
+    db_clear_error(db);
 
     char tid_str[32], sid_str[32];
     snprintf(tid_str, sizeof(tid_str), "%d", ticket_id);
@@ -347,6 +350,7 @@ int ticket_update_status(DatabaseConnection *db, int ticket_id, int new_status_i
         2, NULL, params, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
@@ -358,6 +362,7 @@ int ticket_update_status(DatabaseConnection *db, int ticket_id, int new_status_i
 
 int ticket_assign(DatabaseConnection *db, int ticket_id, const char *assignee, const char *model) {
     if (!db || !assignee) return 0;
+    db_clear_error(db);
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
@@ -376,6 +381,7 @@ int ticket_assign(DatabaseConnection *db, int ticket_id, const char *assignee, c
     }
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
@@ -387,6 +393,7 @@ int ticket_assign(DatabaseConnection *db, int ticket_id, const char *assignee, c
 
 int ticket_update_title(DatabaseConnection *db, int ticket_id, const char *new_title) {
     if (!db || !new_title) return 0;
+    db_clear_error(db);
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
@@ -397,6 +404,7 @@ int ticket_update_title(DatabaseConnection *db, int ticket_id, const char *new_t
         2, NULL, params, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
@@ -408,6 +416,7 @@ int ticket_update_title(DatabaseConnection *db, int ticket_id, const char *new_t
 
 int ticket_update_description(DatabaseConnection *db, int ticket_id, const char *new_description) {
     if (!db) return 0;
+    db_clear_error(db);
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
@@ -426,6 +435,7 @@ int ticket_update_description(DatabaseConnection *db, int ticket_id, const char 
     }
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
@@ -437,6 +447,7 @@ int ticket_update_description(DatabaseConnection *db, int ticket_id, const char 
 
 int ticket_update_effort_estimate(DatabaseConnection *db, int ticket_id, const char *estimate) {
     if (!db) return 0;
+    db_clear_error(db);
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
@@ -455,6 +466,7 @@ int ticket_update_effort_estimate(DatabaseConnection *db, int ticket_id, const c
     }
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
@@ -466,6 +478,7 @@ int ticket_update_effort_estimate(DatabaseConnection *db, int ticket_id, const c
 
 int ticket_update_effort_actual(DatabaseConnection *db, int ticket_id, const char *actual) {
     if (!db) return 0;
+    db_clear_error(db);
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
@@ -484,6 +497,7 @@ int ticket_update_effort_actual(DatabaseConnection *db, int ticket_id, const cha
     }
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
@@ -495,6 +509,7 @@ int ticket_update_effort_actual(DatabaseConnection *db, int ticket_id, const cha
 
 int ticket_update_effort_unit(DatabaseConnection *db, int ticket_id, const char *unit) {
     if (!db) return 0;
+    db_clear_error(db);
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", ticket_id);
@@ -513,6 +528,7 @@ int ticket_update_effort_unit(DatabaseConnection *db, int ticket_id, const char 
     }
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
@@ -560,6 +576,7 @@ TicketTask *ticket_add_task(DatabaseConnection *db, int ticket_id, const char *t
 
 int ticket_complete_task(DatabaseConnection *db, int task_id) {
     if (!db) return 0;
+    db_clear_error(db);
 
     char id_str[32];
     snprintf(id_str, sizeof(id_str), "%d", task_id);
@@ -570,6 +587,7 @@ int ticket_complete_task(DatabaseConnection *db, int task_id) {
         1, NULL, params, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
@@ -689,6 +707,7 @@ int ticket_link(DatabaseConnection *db, int from_id, int to_id, const char *rela
 
 int ticket_unlink(DatabaseConnection *db, int from_id, int to_id, const char *relation_type) {
     if (!db || !relation_type) return 0;
+    db_clear_error(db);
 
     char from_str[32], to_str[32];
     snprintf(from_str, sizeof(from_str), "%d", from_id);
@@ -701,6 +720,7 @@ int ticket_unlink(DatabaseConnection *db, int from_id, int to_id, const char *re
         3, NULL, p, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
         if (res) PQclear(res);
         return 0;
     }
