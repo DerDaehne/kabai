@@ -586,6 +586,8 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         const char *estr = NULL;
         char buf[64];
         if (!param_is_null(params, "effort_estimate") && param_double(params, "effort_estimate", &v)) {
+            if (v < 0)
+                return mcp_tool_err(id, "effort_estimate must be >= 0");
             snprintf(buf, sizeof(buf), "%g", v);
             estr = buf;
         }
@@ -598,6 +600,8 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         const char *astr = NULL;
         char buf[64];
         if (!param_is_null(params, "effort_actual") && param_double(params, "effort_actual", &v)) {
+            if (v < 0)
+                return mcp_tool_err(id, "effort_actual must be >= 0");
             snprintf(buf, sizeof(buf), "%g", v);
             astr = buf;
         }
