@@ -54,7 +54,9 @@ and improvise.
 
 ## Session start (always)
 
-1. `kabai_list_projects` → find your project id.
+1. `kabai_list_projects` → find your project id. Archived projects are
+   excluded by default (`include_archived: true` to see them) — their
+   tickets are read-only; a human reactivates them in kbai-ui, never you.
 2. `kabai_list_board_statuses(project_id)` → column ids are **per
    project**, never reuse them across projects. Read each column's
    `agent_role_instruction` and follow it.
@@ -86,6 +88,12 @@ and improvise.
 9. **docs_required is mandatory** for architecture, design-decision, and
    schema work — and for EVERY epic. An epic MUST NOT close without a
    note created or substantially updated and linked during its lifetime.
+10. **Effort fields** (`effort_estimate`/`effort_actual`, numeric,
+    `effort_unit` free text) are separate from the XS–XL estimate in the
+    description — fill in real numbers via `kabai_update_ticket` when you
+    have them, never invent one just to fill the field.
+11. **A write rejected because the project is archived is not a bug.**
+    Do not retry or work around it — tell the human; only they reactivate.
 
 ## Golden rules — knowledge base
 
@@ -152,4 +160,6 @@ epics closed without new/updated linked docs · notes written only as a
 closing chore before done · notes nobody ever verifies · orphan duplicate
 canvases · image/sketch elements without a real description · committed
 work left sitting as canvas text blocks instead of becoming tickets ·
-frames derived into epics without a `ref` element linking back.
+frames derived into epics without a `ref` element linking back · retrying
+or routing around an archived-project write rejection instead of asking
+the human.

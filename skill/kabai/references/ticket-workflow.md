@@ -29,6 +29,15 @@ At the start of any session that touches kabai, in this order:
 4. `kabai_list_status_transitions(project_id)` — learn the workflow graph
    before you move anything.
 
+**Archived projects are read-only.** `kabai_list_projects` excludes them by
+default — pass `include_archived: true` only when you specifically need to
+see one (e.g. following up on an old reference). If any write call fails
+with a message naming an archived project, a human intentionally took that
+project out of focus: do NOT retry, and do NOT look for a way around it.
+Say so in your response, and ask the human if the ticket matters — there is
+no MCP tool to reactivate a project; that is a deliberate, human-only action
+in kbai-ui.
+
 Example:
 
 ```json
@@ -151,11 +160,18 @@ Relations may cross projects. Remove wrong links with
 
 ## 8. Editing and deleting
 
-- `kabai_update_ticket(ticket_id, title?, description?, docs_required?)` —
-  keep descriptions current: when scope changes mid-work, update the
-  description AND leave a comment about the change. Pass
-  `description: null` to clear. When unsetting `docs_required`, justify it
-  in a comment.
+- `kabai_update_ticket(ticket_id, title?, description?, docs_required?,
+  effort_estimate?, effort_actual?, effort_unit?)` — keep descriptions
+  current: when scope changes mid-work, update the description AND leave a
+  comment about the change. Pass `description: null` to clear. When
+  unsetting `docs_required`, justify it in a comment.
+- **Effort fields are structured, not the free-text estimate in the
+  description.** `effort_estimate`/`effort_actual` are plain numbers,
+  `effort_unit` is free text (days, story points, tokens — pick whatever
+  the project already uses, or ask if unclear). Fill in `effort_estimate`
+  during refinement alongside the description, and `effort_actual` when you
+  finish, if you have a real number — do not invent one just to fill the
+  field. Pass `null` to clear any of the three.
 - **Refining a rough ticket:** when you pick up a ticket whose description
   is only a rough idea, your FIRST work step is `kabai_update_ticket` to
   bring the description up to standard (scope, references, effort,
@@ -207,3 +223,5 @@ from_status_id, to_status_id)` set up new boards. Rules:
 - Knowledge written only into comments instead of the knowledge base.
 - Epic closed without a new or substantially updated, linked note — or an
   architecture/design/schema ticket created without `docs_required: true`.
+- Retrying or working around an archived-project write rejection instead of
+  telling the human — reactivation is a deliberate, human-only UI action.
