@@ -30,7 +30,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kbai-linux
-          path: ./result/bin/kbai
+          path: ./result/bin/kabai
           retention-days: 7
 
       - name: Upload artifact (Windows)
@@ -65,7 +65,7 @@ jobs:
       - name: Collect release artifacts
         run: |
           mkdir -p release-dir
-          cp result/bin/kbai release-dir/kbai-linux-x86_64
+          cp result/bin/kabai release-dir/kbai-linux-x86_64
           cp result-windows/bin/kabai.exe release-dir/kabai-windows-x86_64.exe
 
       - name: Publish release
