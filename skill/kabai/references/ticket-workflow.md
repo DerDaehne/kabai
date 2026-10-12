@@ -118,6 +118,8 @@ kabai_assign_ticket {"ticket_id": 123}
 - For every acceptance criterion in the description, add one
   `kabai_add_task(ticket_id, title)`. An empty task list means the ticket
   cannot be verified — reviewers MUST treat it as not done.
+  Exception: rough backlog tickets that carry `Acceptance (draft)` in the
+  description get their tasks at refinement (§11).
 - Mark each task with `kabai_complete_task(task_id)` **immediately** when
   it is verifiably met. NEVER batch-complete all tasks right before closing:
   the task list is live progress state for other agents and humans.
@@ -261,7 +263,35 @@ removes an edge (implicit human_* edges cannot be removed). Rules:
 - Wire transitions BEFORE agents start working; a board without transitions
   cannot be worked (every move is rejected).
 
-## 11. Anti-patterns (instant review rejections)
+## 11. Planning at scale (setting up a whole project or epic tree)
+
+Use the batch tools from §2 ("Several tickets at once"): one
+`kabai_create_tickets` call instead of dozens of single calls.
+
+1. **Draft vs. refined.** The rule "one task per acceptance criterion" (§3)
+   applies to tickets that are about to be worked. A rough backlog ticket
+   carries `Acceptance (draft)` in its description and has NO tasks yet; the
+   tasks are created during refinement (§8), when the ticket moves to
+   `ready`. Only ready tickets are fully equipped: final acceptance
+   criteria in the description AND one task per criterion.
+2. **Creation order = dependency order.** Cross-references in descriptions
+   MUST be ticket numbers (`#765`), not paraphrases ("the domain-layer
+   ticket"). In a batch, give items a `ref` and write `$ref` in
+   `title`/`description`/relations: the server substitutes the real `#id`,
+   also for items that come later in the same call. Creating tickets one by
+   one: create in dependency order, or update the earlier descriptions with
+   the new numbers afterwards.
+3. **Epics in the workflow.** An epic lives in the column of its furthest
+   advanced child, but never past review: whoever moves a child forward
+   moves the epic along. `done` is a human decision after every child is
+   done or explicitly descoped and the documentation duty (§7) is met.
+4. **Clarify the boundaries first.** Before the first ADR of a new project,
+   ask the human whether it may couple to existing systems (databases,
+   APIs, other projects). Decisions made on a wrong assumption get
+   superseded minutes later (a `supersedes` chain from the first hour is a
+   smell). Write the answer down as the project's first note.
+
+## 12. Anti-patterns (instant review rejections)
 
 - Ticket worked without being assigned, or assigned but never picked up.
 - Ticket without tasks, or all tasks completed in one batch at the end.

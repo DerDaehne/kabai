@@ -67,7 +67,15 @@ kabai_docs_create_note {
 - **kind** — `adr` for a decision with context/alternatives/consequences;
   `hub` for an overview page; `note` for everything else. No other values
   exist.
-- **tags** — lowercase topic words for filtering (they are also
+- **ADR status** — until notes carry a status field, the FIRST line of every
+  `adr` body is `**Status:** vorgeschlagen`, `**Status:** akzeptiert` or
+  `**Status:** ERSETZT durch <slug>` (the status words are German on purpose:
+  they are searchable as written). Set `akzeptiert` once the decision was
+  communicated to or confirmed by the human. Replacing an ADR always means a
+  NEW note plus a `supersedes` link (§4) and changing the old note's first
+  line to `ERSETZT durch <new slug>` — even when the old ADR is only minutes
+  old, as soon as it was communicated. The old body stays untouched
+  otherwise (history).- **tags** — lowercase topic words for filtering (they are also
   search-indexed). Reuse existing tags (`kabai_docs_list_notes` shows
   them) instead of inventing synonyms.
 - **project_ids** — 0..n projects; the zettelkasten is global. Knowledge

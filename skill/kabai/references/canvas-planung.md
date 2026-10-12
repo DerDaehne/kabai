@@ -64,6 +64,16 @@ Five types, each with its own `content` shape:
 canvas. `kabai_get_canvas(canvas_id)` returns every element and edge in
 one call — use it, not repeated single-element reads.
 
+**Coordinates are absolute.** `position_x`/`position_y` are canvas
+coordinates, also for an element with a `parent_frame_id`: the server
+stores them as given and does NOT make them relative to the frame. Frames
+do not grow or follow: adding an element does not resize its frame, and
+moving or resizing a frame (`kabai_update_canvas_element`) does not move
+its children. So place children inside the frame's rectangle
+(`position_x`/`position_y` plus `width`/`height` of the frame) yourself, give
+the frame a `width`/`height` that encloses them, and when you move a frame,
+move its children by the same offset. Read the frame's position and size
+from `kabai_get_canvas` before placing children.
 ## 4. description (alt-text) is MANDATORY for image and sketch
 
 `kabai_add_canvas_element` REJECTS an `image` or `sketch` element without

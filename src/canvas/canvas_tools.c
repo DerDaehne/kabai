@@ -800,13 +800,20 @@ void canvas_register_tools(McpRegistry *r) {
         "may be in ANY project); frame: {\"title\":...} (a grouping container — frames "
         "replace milestones, see concept-kabai-canvas).",
         true);
-    schema_num(s, "position_x", "X position on the canvas (default 0)", false);
-    schema_num(s, "position_y", "Y position on the canvas (default 0)", false);
+    schema_num(s, "position_x",
+        "X in ABSOLUTE canvas coordinates (default 0) - also for elements inside a frame: the value is "
+        "stored as given, not relative to parent_frame_id", false);
+    schema_num(s, "position_y",
+        "Y in ABSOLUTE canvas coordinates (default 0) - also for elements inside a frame, not "
+        "relative to parent_frame_id", false);
     schema_num(s, "width", "Element width (optional)", false);
     schema_num(s, "height", "Element height (optional)", false);
     schema_num(s, "z_order", "Stacking order (default 0)", false);
     schema_num(s, "parent_frame_id",
-        "ID of a frame element on the SAME canvas to group this element under (optional)", false);
+        "ID of a frame element on the SAME canvas to group this element under (optional). "
+        "Grouping only: position_x/y stay absolute canvas coordinates, and frames do not grow or move "
+        "with their children - place the child inside the frame's rectangle and size the frame "
+        "(width/height) to enclose it yourself", false);
     schema_str(s, "description",
         "Alt-text. REQUIRED for type image/sketch — this is how non-multimodal agents "
         "understand what the image/sketch shows; optional for other types.", false);
@@ -820,8 +827,8 @@ void canvas_register_tools(McpRegistry *r) {
     schema_num(s, "element_id", "Numeric element ID", true);
     schema_object(s, "content", "New content (optional, replaces the old value — same shape rules as kabai_add_canvas_element)", false);
     schema_str(s, "description", "New alt-text (optional). Cannot be cleared on image/sketch elements.", false);
-    schema_num(s, "position_x", "New X position (optional)", false);
-    schema_num(s, "position_y", "New Y position (optional)", false);
+    schema_num(s, "position_x", "New X position, absolute canvas coordinates (optional)", false);
+    schema_num(s, "position_y", "New Y position, absolute canvas coordinates (optional)", false);
     schema_num(s, "width", "New width (optional)", false);
     schema_num(s, "height", "New height (optional)", false);
     schema_num(s, "z_order", "New stacking order (optional)", false);
