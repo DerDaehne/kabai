@@ -70,7 +70,9 @@ static cJSON *tx_db_fail(McpContext *ctx, cJSON *id, const char *label, const ch
     snprintf(msg, sizeof(msg), "%s", kanban_db_msg(ctx->db, out, sizeof(out), fallback));
     db_rollback_transaction(ctx->db);
     if (!label) return mcp_tool_err(id, msg);
-    snprintf(out, sizeof(out), "%s: %s", label, msg);
+    size_t ll = strlen(label);
+    bool has_sep = ll >= 2 && label[ll - 2] == ':' && label[ll - 1] == ' ';
+    snprintf(out, sizeof(out), has_sep ? "%s%s" : "%s: %s", label, msg);
     return mcp_tool_err(id, out);
 }
 
@@ -146,10 +148,11 @@ static cJSON *tool_get_project(McpContext *ctx, cJSON *id, cJSON *params) {
  * Tickets
  * ============================================================================ */
 
-/* ---- Bulk planning (#798): ticket + tasks + relations in one transaction ---- */
+/* ---- Bulk planning: ticket + tasks + relations in one transaction ---- */
 
 #define MAX_BATCH_ITEMS 50
 #define REF_MAX 64
+#define MAX_BATCH_LIST 100  /* titles[] and links[] */
 
 /* Batch-local names ("t1") of the items being created, with their ids. */
 typedef struct {
@@ -264,6 +267,12 @@ static int resolve_target(const cJSON *v, const RefTable *refs, char *err, size_
     return 0;
 }
 
+/* Optional parameter: absent and explicit JSON null both read as NULL. */
+static cJSON *opt(cJSON *obj, const char *name) {
+    cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, name);
+    return cJSON_IsNull(v) ? NULL : v;
+}
+
 /* Fail inside the transaction naming the offending value: "<where><what>: <why>". */
 static cJSON *extras_fail(McpContext *ctx, cJSON *id, const char *where, const char *what,
                           const char *why) {
@@ -272,11 +281,81 @@ static cJSON *extras_fail(McpContext *ctx, cJSON *id, const char *where, const c
     return tx_fail(ctx, id, buf);
 }
 
+/* Rolls back with the cycle named if any of ids now waits for itself through
+ * "blocks" edges (one recursive walk, starting only from the touched tickets). */
+static cJSON *cycle_check(McpContext *ctx, cJSON *id, const int *ids, int n) {
+    char *arr = malloc((size_t)n * 12 + 3);
+    if (!arr) return tx_fail(ctx, id, "Out of memory");
+    size_t len = 0;
+    arr[len++] = '{';
+    for (int i = 0; i < n; i++)
+        len += (size_t)sprintf(arr + len, i ? ",%d" : "%d", ids[i]);
+    arr[len++] = '}';
+    arr[len] = '\0';
+    const char *p[1] = {arr};
+    db_clear_error(ctx->db);
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "WITH RECURSIVE walk(start, cur, path, cyc) AS ("
+        "  SELECT s, s, ARRAY[s], false FROM unnest($1::int[]) s"
+        "  UNION ALL"
+        "  SELECT w.start, r.to_ticket_id, w.path || r.to_ticket_id, r.to_ticket_id = w.start"
+        "  FROM walk w JOIN ticket_relations r"
+        "    ON r.from_ticket_id = w.cur AND r.relation_type = 'blocks'"
+        "  WHERE NOT w.cyc AND (r.to_ticket_id = w.start OR NOT r.to_ticket_id = ANY(w.path))"
+        ") SELECT path::text FROM walk WHERE cyc LIMIT 1",
+        1, NULL, p, NULL, NULL, 0);
+    free(arr);
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        db_capture_error(ctx->db, res);
+        if (res) PQclear(res);
+        return tx_db_fail(ctx, id, NULL, "Failed to check for blocking cycles");
+    }
+    cJSON *err = NULL;
+    if (PQntuples(res) > 0) {
+        char chain[400] = "#";
+        size_t n2 = 1;
+        for (const char *c = PQgetvalue(res, 0, 0); *c && n2 < sizeof(chain) - 6; c++) {
+            if (*c == '{' || *c == '}') continue;
+            if (*c == ',') { memcpy(chain + n2, " -> #", 5); n2 += 5; }
+            else chain[n2++] = *c;
+        }
+        chain[n2] = '\0';
+        char msg[600];
+        snprintf(msg, sizeof(msg), "Blocking cycle: %s - each ticket would wait for the next "
+                 "and the last for the first, so none could start. Remove one blocks/blocked_by "
+                 "entry on this chain and retry. Nothing was written.", chain);
+        err = tx_fail(ctx, id, msg);
+    }
+    PQclear(res);
+    return err;
+}
+
+/* The same ticket in blocks and blocked_by of one item would wait for itself. */
+static cJSON *check_block_overlap(McpContext *ctx, cJSON *id, cJSON *spec,
+                                  const RefTable *refs, const char *where) {
+    cJSON *a = opt(spec, "blocks"), *b = opt(spec, "blocked_by");
+    if (!cJSON_IsArray(a) || !cJSON_IsArray(b)) return NULL;
+    char err[300];
+    cJSON *x, *y;
+    cJSON_ArrayForEach(x, a) {
+        int xi = resolve_target(x, refs, err, sizeof(err));
+        if (!xi) continue;  /* reported when the entry is linked */
+        cJSON_ArrayForEach(y, b) {
+            if (resolve_target(y, refs, err, sizeof(err)) != xi) continue;
+            char msg[200];
+            snprintf(msg, sizeof(msg), "#%d is in both blocks and blocked_by: the ticket would "
+                     "wait for itself. Keep it in only one of them.", xi);
+            return extras_fail(ctx, id, where, "blocks", msg);
+        }
+    }
+    return NULL;
+}
+
 /* Link ticket new_id with every entry of spec[field] (ids or "$refs").
  * incoming: entry -> new_id (blocked_by), else new_id -> entry (blocks). */
 static cJSON *link_list(McpContext *ctx, cJSON *id, int new_id, cJSON *spec, const char *field,
                         const RefTable *refs, const char *where) {
-    cJSON *list = cJSON_GetObjectItemCaseSensitive(spec, field);
+    cJSON *list = opt(spec, field);
     if (!list) return NULL;
     if (!cJSON_IsArray(list))
         return extras_fail(ctx, id, where, field, "must be an array of ticket ids");
@@ -303,7 +382,7 @@ static cJSON *link_list(McpContext *ctx, cJSON *id, int new_id, cJSON *spec, con
  * with the transaction already rolled back. */
 static cJSON *apply_extras(McpContext *ctx, cJSON *id, int new_id, cJSON *spec,
                            const RefTable *refs, const char *where) {
-    cJSON *tasks = cJSON_GetObjectItemCaseSensitive(spec, "tasks");
+    cJSON *tasks = opt(spec, "tasks");
     if (tasks) {
         if (!cJSON_IsArray(tasks))
             return extras_fail(ctx, id, where, "tasks", "must be an array of strings");
@@ -324,8 +403,10 @@ static cJSON *apply_extras(McpContext *ctx, cJSON *id, int new_id, cJSON *spec,
         }
     }
 
-    cJSON *parent = cJSON_GetObjectItemCaseSensitive(spec, "parent_id");
-    if (!parent) parent = cJSON_GetObjectItemCaseSensitive(spec, "parent");
+    cJSON *parent = opt(spec, "parent_id"), *alias = opt(spec, "parent");
+    if (parent && alias)
+        return extras_fail(ctx, id, where, "parent", "parent and parent_id are the same parameter: pass only one");
+    if (!parent) parent = alias;
     if (parent) {
         char err[300];
         int p = resolve_target(parent, refs, err, sizeof(err));
@@ -337,7 +418,9 @@ static cJSON *apply_extras(McpContext *ctx, cJSON *id, int new_id, cJSON *spec,
         }
     }
 
-    cJSON *err = link_list(ctx, id, new_id, spec, "blocks", refs, where);
+    cJSON *err = check_block_overlap(ctx, id, spec, refs, where);
+    if (err) return err;
+    err = link_list(ctx, id, new_id, spec, "blocks", refs, where);
     return err ? err : link_list(ctx, id, new_id, spec, "blocked_by", refs, where);
 }
 
@@ -366,6 +449,10 @@ static cJSON *tool_create_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         return tx_db_fail(ctx, id, NULL, "Failed to create ticket");
     cJSON *err = apply_extras(ctx, id, new_id, params, NULL, "");
     if (err) return err;
+    if (opt(params, "blocks") || opt(params, "blocked_by")) {
+        err = cycle_check(ctx, id, &new_id, 1);
+        if (err) return err;
+    }
     if (!db_commit_transaction(ctx->db))
         return tx_fail(ctx, id, "Failed to commit transaction");
 
@@ -420,7 +507,10 @@ static cJSON *tool_create_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
         item_where(where, sizeof(where), i, item_ref[i]);
         const char *msg = NULL;
         const char *type_val = cJSON_IsObject(it) ? param_str(it, "type") : NULL;
+        int item_project = 0;
         if (!cJSON_IsObject(it)) msg = "must be an object";
+        else if (param_num(it, "project_id", &item_project) && item_project != project_id)
+            msg = "project_id differs from the call's project_id: one call creates tickets in one project only";
         else if (!param_str(it, "title")) msg = "missing title";
         else if (!param_num_alias(it, "status_id", "new_status_id", &status[i]) &&
                  !(status[i] = default_status))
@@ -486,6 +576,8 @@ static cJSON *tool_create_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
         cJSON *err = apply_extras(ctx, id, item_id[i], cJSON_GetArrayItem(items, i), &refs, where);
         if (err) return err;
     }
+    cJSON *cyc = cycle_check(ctx, id, item_id, n);
+    if (cyc) return cyc;
     if (!db_commit_transaction(ctx->db))
         return tx_fail(ctx, id, "Failed to commit transaction");
 
@@ -1274,7 +1366,15 @@ static cJSON *link_tickets_batch(McpContext *ctx, cJSON *id, cJSON *links) {
     if (!cJSON_IsArray(links) || n == 0)
         return mcp_tool_err(id, "links must be a non-empty array of "
                                 "{from_ticket_id, to_ticket_id, relation_type}");
-    if (!db_begin_transaction(ctx->db)) return mcp_tool_err(id, "Failed to start transaction");
+    if (n > MAX_BATCH_LIST)
+        return mcp_tool_err(id, "Too many links (max 100 per call). Nothing was linked - split the call");
+    int *touched = malloc(sizeof(int) * 2 * (size_t)n);
+    if (!touched) return mcp_tool_err(id, "Out of memory");
+    int created = 0, already = 0, blocks_seen = 0;
+    if (!db_begin_transaction(ctx->db)) {
+        free(touched);
+        return mcp_tool_err(id, "Failed to start transaction");
+    }
     for (int i = 0; i < n; i++) {
         cJSON *l = cJSON_GetArrayItem(links, i);
         int from_id, to_id;
@@ -1286,22 +1386,38 @@ static cJSON *link_tickets_batch(McpContext *ctx, cJSON *id, cJSON *links) {
         if (!bad && !valid_relation_type(rel)) bad = INVALID_RELATION_MSG;
         if (bad) {
             snprintf(msg, sizeof(msg), "links[%d]: %s. Nothing was linked.", i, bad);
+            free(touched);
             return tx_fail(ctx, id, msg);
         }
-        if (!ticket_link(ctx->db, from_id, to_id, rel)) {
+        int linked = ticket_link(ctx->db, from_id, to_id, rel);
+        if (!linked) {
             snprintf(msg, sizeof(msg), "links[%d] (%d -> %d %s)", i, from_id, to_id, rel);
+            free(touched);
             return tx_db_fail(ctx, id, msg, "Failed to create relation");
         }
+        if (linked == 1) created++; else already++;
+        touched[2 * i] = from_id;
+        touched[2 * i + 1] = to_id;
+        if (strcmp(rel, "blocks") == 0) blocks_seen++;
     }
+    if (blocks_seen) {
+        cJSON *cyc = cycle_check(ctx, id, touched, 2 * n);
+        if (cyc) {
+            free(touched);
+            return cyc;
+        }
+    }
+    free(touched);
     if (!db_commit_transaction(ctx->db)) return tx_fail(ctx, id, "Failed to commit transaction");
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
-    cJSON_AddNumberToObject(r, "linked", n);
+    cJSON_AddNumberToObject(r, "linked", created);
+    cJSON_AddNumberToObject(r, "already_linked", already);
     return mcp_tool_ok(id, r);
 }
 
 static cJSON *tool_link_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
-    cJSON *links = cJSON_GetObjectItemCaseSensitive(params, "links");
+    cJSON *links = opt(params, "links");
     if (links) return link_tickets_batch(ctx, id, links);
 
     int from_id, to_id;
@@ -1353,6 +1469,8 @@ static cJSON *add_tasks_batch(McpContext *ctx, cJSON *id, int ticket_id, const c
                               cJSON *titles) {
     if (!cJSON_IsArray(titles) || cJSON_GetArraySize(titles) == 0)
         return mcp_tool_err(id, "titles must be a non-empty array of strings");
+    if (cJSON_GetArraySize(titles) > MAX_BATCH_LIST)
+        return mcp_tool_err(id, "Too many titles (max 100 per call). Nothing was added - split the call");
     if (!db_begin_transaction(ctx->db)) return mcp_tool_err(id, "Failed to start transaction");
     cJSON *out = cJSON_CreateArray();
     int i = title ? -1 : 0;  /* -1: the single title goes first */
@@ -1391,7 +1509,7 @@ static cJSON *add_tasks_batch(McpContext *ctx, cJSON *id, int ticket_id, const c
 static cJSON *tool_add_task(McpContext *ctx, cJSON *id, cJSON *params) {
     int ticket_id;
     const char *title = param_str(params, "title");
-    cJSON *titles = cJSON_GetObjectItemCaseSensitive(params, "titles");
+    cJSON *titles = opt(params, "titles");
     if (!param_num(params, "ticket_id", &ticket_id) || (!title && !titles))
         return mcp_tool_err(id, titles ? "Missing required parameter: ticket_id"
                                        : "Missing required parameters: ticket_id, title");

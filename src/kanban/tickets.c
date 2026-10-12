@@ -36,70 +36,6 @@ void ticket_detailed_free(TicketDetailed *d) {
  * Ticket CRUD
  * ============================================================================ */
 
-Ticket *ticket_create(
-    DatabaseConnection *db,
-    int project_id,
-    int status_id,
-    const char *title,
-    const char *description,
-    const char *type
-) {
-    if (!db || !title) return NULL;
-    db_clear_error(db);
-
-    const char *effective_type = (type && type[0]) ? type : "ticket";
-
-    char proj_str[32], stat_str[32];
-    snprintf(proj_str, sizeof(proj_str), "%d", project_id);
-    snprintf(stat_str, sizeof(stat_str), "%d", status_id);
-
-    PGresult *res;
-
-    if (description) {
-        const char *params[5] = {proj_str, stat_str, title, description, effective_type};
-        res = PQexecParams(db->conn,
-            "INSERT INTO tickets (project_id, status_id, title, description, type)"
-            " VALUES ($1, $2, $3, $4, $5) RETURNING id",
-            5, NULL, params, NULL, NULL, 0);
-    } else {
-        const char *params[4] = {proj_str, stat_str, title, effective_type};
-        res = PQexecParams(db->conn,
-            "INSERT INTO tickets (project_id, status_id, title, type)"
-            " VALUES ($1, $2, $3, $4) RETURNING id",
-            4, NULL, params, NULL, NULL, 0);
-    }
-
-    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
-        fprintf(stderr, "ticket_create: %s\n", res ? PQresultErrorMessage(res) : "null result");
-        db_capture_error(db, res);
-        if (res) PQclear(res);
-        return NULL;
-    }
-
-    int id = atoi(PQgetvalue(res, 0, 0));
-    PQclear(res);
-
-    Ticket *t = malloc(sizeof(Ticket));
-    if (!t) return NULL;
-
-    t->id                     = id;
-    t->project_id             = project_id;
-    t->status_id              = status_id;
-    t->type                   = strdup(effective_type);
-    t->title                  = strdup(title);
-    t->description            = description ? strdup(description) : NULL;
-    t->assignee               = NULL;
-    t->model                  = NULL;
-    t->effort_estimate        = NULL;
-    t->effort_actual          = NULL;
-    t->effort_unit            = NULL;
-    t->created_at             = NULL;
-    t->updated_at             = NULL;
-    t->status_name            = NULL;
-    t->agent_role_instruction = NULL;
-    return t;
-}
-
 Ticket *ticket_get_by_id(DatabaseConnection *db, int ticket_id) {
     if (!db) return NULL;
 
@@ -695,8 +631,9 @@ int ticket_link(DatabaseConnection *db, int from_id, int to_id, const char *rela
         if (res) PQclear(res);
         return 0;
     }
+    int created = atoi(PQcmdTuples(res)) > 0;
     PQclear(res);
-    return 1;
+    return created ? 1 : 2;
 }
 
 int ticket_unlink(DatabaseConnection *db, int from_id, int to_id, const char *relation_type) {

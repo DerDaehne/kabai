@@ -101,7 +101,9 @@ kabai_assign_ticket {"ticket_id": 123}
   batch-local name such as `"t1"`). `parent`, `blocks` and `blocked_by` accept
   ticket IDs or `"$t1"` references to earlier OR later items of the same call;
   `$t1` inside `title`/`description` becomes `#<id>`, so cross-references are
-  real ticket numbers. An unknown or duplicate ref or an invalid item creates
+  real ticket numbers. There is no escape for a literal ref: a `$` directly before a known
+  ref is kept and the ref is still replaced (`$$t1` becomes `$#<id>`), so
+  write such text without the ref name. An unknown or duplicate ref or an invalid item creates
   nothing; the error names the item index and ref. The answer is
   `[{ref, id, status_id}]`.
 - `kabai_add_task(ticket_id, titles: [...])` and
@@ -275,7 +277,7 @@ Use the batch tools from §2 ("Several tickets at once"): one
    `ready`. Only ready tickets are fully equipped: final acceptance
    criteria in the description AND one task per criterion.
 2. **Creation order = dependency order.** Cross-references in descriptions
-   MUST be ticket numbers (`#765`), not paraphrases ("the domain-layer
+   MUST be ticket numbers (`#123`), not paraphrases ("the domain-layer
    ticket"). In a batch, give items a `ref` and write `$ref` in
    `title`/`description`/relations: the server substitutes the real `#id`,
    also for items that come later in the same call. Creating tickets one by

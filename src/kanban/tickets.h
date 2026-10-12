@@ -64,25 +64,6 @@ typedef struct {
 } TicketDetailed;
 
 /**
- * @brief Create a new ticket
- * @param db Database connection
- * @param project_id Project ID
- * @param status_id Initial status ID
- * @param title Ticket title
- * @param description Ticket description
- * @param type "ticket" or "epic" (NULL defaults to "ticket")
- * @return Ticket* or NULL on failure
- */
-Ticket* ticket_create(
-    DatabaseConnection *db,
-    int project_id,
-    int status_id,
-    const char *title,
-    const char *description,
-    const char *type
-);
-
-/**
  * @brief Get ticket by ID
  * @param db Database connection
  * @param ticket_id Ticket ID
@@ -224,7 +205,7 @@ void ticket_task_free_array(TicketTask **tasks);
 /**
  * @brief Create a directed relation between two tickets
  * @param relation_type One of: parent_of, blocks, duplicate_of, relates_to
- * @return 1 on success, 0 on failure (including duplicate)
+ * @return 1 if the relation was created, 2 if it already existed (no-op), 0 on failure
  */
 int ticket_link(DatabaseConnection *db, int from_id, int to_id, const char *relation_type);
 
