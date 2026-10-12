@@ -224,7 +224,8 @@ static cJSON *tool_list_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
 #define TICKET_SEARCH_TAIL \
     "t.description, t.effort_estimate::text, t.effort_actual::text, t.effort_unit, " \
     "t.created_at::text, t.updated_at::text " \
-    "FROM tickets t JOIN board_statuses bs ON bs.id = t.status_id "
+    "FROM tickets t JOIN board_statuses bs ON bs.id = t.status_id " \
+    "JOIN projects pr ON pr.id = t.project_id "
 
 static cJSON *search_ticket_rows_to_json(PGresult *res, const char *match_type, bool full) {
     cJSON *arr = cJSON_CreateArray();
@@ -267,14 +268,16 @@ static cJSON *tool_search_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
     param_num(params, "project_id", &project_id);
     param_num(params, "limit", &limit);
     bool full = param_bool(params, "full", false);
+    bool include_archived = param_bool(params, "include_archived", false);
 
     char proj_str[32], limit_str[32];
     snprintf(proj_str, sizeof(proj_str), "%d", project_id);
     snprintf(limit_str, sizeof(limit_str), "%d", limit);
-    const char *q_params[3] = {
+    const char *q_params[4] = {
         query,
         project_id > 0 ? proj_str : NULL,
-        limit > 0 ? limit_str : NULL
+        limit > 0 ? limit_str : NULL,
+        include_archived ? "true" : "false"
     };
 
     /* ponytail: the tsvector is computed per row on the fly (no column, no
@@ -292,9 +295,10 @@ static cJSON *tool_search_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
         "                  setweight(to_tsvector('simple', COALESCE(t.description, '')), 'C') "
         "                  AS tsv) v "
         "WHERE v.tsv @@ q AND ($2::int IS NULL OR t.project_id = $2) "
+        "  AND ($2::int IS NOT NULL OR $4::boolean OR NOT pr.archived) "
         "ORDER BY ts_rank(v.tsv, q) DESC, t.id DESC "
-        "LIMIT COALESCE($3::int, 20)",
-        3, NULL, q_params, NULL, NULL, 0);
+        "LIMIT LEAST(COALESCE($3::int, 20), 100)",
+        4, NULL, q_params, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         if (res) PQclear(res);
@@ -314,9 +318,10 @@ static cJSON *tool_search_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
         "       similarity(t.title, $1)::text, left(COALESCE(t.description, t.title), 160), "
         TICKET_SEARCH_TAIL
         "WHERE t.title % $1 AND ($2::int IS NULL OR t.project_id = $2) "
+        "  AND ($2::int IS NOT NULL OR $4::boolean OR NOT pr.archived) "
         "ORDER BY similarity(t.title, $1) DESC, t.id DESC "
-        "LIMIT COALESCE($3::int, 20)",
-        3, NULL, q_params, NULL, NULL, 0);
+        "LIMIT LEAST(COALESCE($3::int, 20), 100)",
+        4, NULL, q_params, NULL, NULL, 0);
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         if (res) PQclear(res);
         return mcp_tool_err(id, "Search failed");
@@ -843,18 +848,30 @@ static cJSON *tool_complete_tasks(McpContext *ctx, cJSON *id, cJSON *params) {
 
     int total = cJSON_GetArraySize(ids_j), done = 0;
     cJSON *not_found = cJSON_CreateArray();
+    cJSON *failed = cJSON_CreateArray();
+    cJSON *invalid = cJSON_CreateArray();
     for (int i = 0; i < total; i++) {
         cJSON *item = cJSON_GetArrayItem(ids_j, i);
-        if (cJSON_IsNumber(item) && ticket_complete_task(ctx->db, item->valueint))
+        if (!cJSON_IsNumber(item) || item->valuedouble != (double)(int)item->valuedouble) {
+            cJSON_AddItemToArray(invalid, cJSON_Duplicate(item, 1));
+        } else if (ticket_complete_task(ctx->db, item->valueint)) {
             done++;
-        else
-            cJSON_AddItemToArray(not_found, cJSON_CreateNumber(cJSON_IsNumber(item) ? item->valueint : 0));
+        } else if (ctx->db->last_primary[0]) {
+            cJSON *f = cJSON_CreateObject();
+            cJSON_AddNumberToObject(f, "task_id", item->valueint);
+            cJSON_AddStringToObject(f, "error", ctx->db->last_primary);
+            cJSON_AddItemToArray(failed, f);
+        } else {
+            cJSON_AddItemToArray(not_found, cJSON_CreateNumber(item->valueint));
+        }
     }
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddNumberToObject(r, "total", total);
     cJSON_AddNumberToObject(r, "completed", done);
     cJSON_AddItemToObject(r, "not_found", not_found);
+    cJSON_AddItemToObject(r, "failed", failed);
+    cJSON_AddItemToObject(r, "invalid", invalid);
     return mcp_tool_ok(id, r);
 }
 
@@ -1242,7 +1259,10 @@ void kanban_register_tools(McpRegistry *r) {
         "Search words. Several words must all match (anywhere, any order); "
         "\"quoted phrase\", OR, -excluded. No stemming: exact word forms only.", true);
     schema_num(s, "project_id", "Restrict to one project (optional, default: search all projects)", false);
-    schema_num(s, "limit", "Max results (optional, default 20)", false);
+    schema_num(s, "limit", "Max results (optional, default 20, capped at 100)", false);
+    schema_bool(s, "include_archived",
+        "Global search only: also search archived projects (optional, default false). "
+        "Ignored when project_id is given (an explicit project is always searched).", false);
     schema_bool(s, "full",
         "If true, also return description, effort fields and timestamps per hit "
         "(optional, default false: lean rows only)", false);
@@ -1251,7 +1271,7 @@ void kanban_register_tools(McpRegistry *r) {
         "hits first). Returns lean rows: id, project_id, status_id, status_name, type, "
         "title, assignee, rank, match_type (fts, or title_similarity as typo-tolerant "
         "fallback when nothing matches) and a snippet around the match. Pass full:true "
-        "for descriptions. Searches all projects unless project_id is given. Use BEFORE "
+        "for descriptions. Searches all non-archived projects unless project_id is given. Use BEFORE "
         "create_ticket to detect duplicates. Changed: the default answer no longer "
         "contains descriptions, and the query is no longer a plain substring.",
         s, tool_search_tickets);
@@ -1382,8 +1402,9 @@ void kanban_register_tools(McpRegistry *r) {
     schema_num_array(s, "task_ids", "Array of task IDs (from get_ticket_detailed)", true);
     mcp_registry_add(r, "kabai_complete_tasks",
         "Batch version of complete_task: mark several acceptance criteria completed in one "
-        "call. Returns total, completed and not_found (IDs that do not exist or were not "
-        "numbers).",
+        "call. Returns total, completed, not_found (IDs that do not exist), failed "
+        "([{task_id, error}], e.g. archived project) and invalid (items that are not "
+        "integers).",
         s, tool_complete_tasks);
 
     /* ---- Comments / Work Log ---- */
