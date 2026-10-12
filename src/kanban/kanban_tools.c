@@ -14,7 +14,7 @@
  * ============================================================================ */
 
 /* Map the captured SQLSTATE/constraint of the last failed service call to
- * an actionable message (Kanban AI #345); mirrors docs_db_error in the
+ * an actionable message; mirrors docs_db_error in the
  * docs module. Falls back to the generic text when nothing was captured.
  * Returns a literal, db->last_primary or buf. */
 static const char *kanban_db_msg(DatabaseConnection *db, char *buf, size_t size,
