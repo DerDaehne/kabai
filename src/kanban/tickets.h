@@ -94,20 +94,12 @@ Ticket* ticket_get_by_id(DatabaseConnection *db, int ticket_id);
  * @param db Database connection
  * @param project_id Project ID
  * @param status_id Filter by status (0 = no filter)
+ * @param assignee_filter Exact assignee (NULL/empty = no filter)
  * @param limit Max results (0 = no limit)
  * @param offset Results to skip (only used when limit > 0)
  * @return Array of Ticket* (NULL-terminated)
  */
-Ticket** ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id, const char *type_filter, int limit, int offset);
-
-/**
- * @brief Search tickets by title/description substring (case-insensitive)
- * @param db Database connection
- * @param project_id Project ID
- * @param query Search string (matched with ILIKE)
- * @return Array of Ticket* (NULL-terminated), max 50 results
- */
-Ticket** ticket_search(DatabaseConnection *db, int project_id, const char *query);
+Ticket** ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id, const char *type_filter, const char *assignee_filter, int limit, int offset);
 
 /**
  * @brief Delete a ticket (cascades tasks, comments, documents)

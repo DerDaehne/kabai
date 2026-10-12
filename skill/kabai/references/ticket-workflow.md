@@ -47,7 +47,9 @@ kabai_list_board_statuses {"project_id": 4}
 ## 2. Creating tickets
 
 - **Duplicate check is mandatory.** Before every `kabai_create_ticket`, run
-  `kabai_search_tickets(project_id, query)` with 1–3 keyword variants
+  `kabai_search_tickets(query)` (add `project_id` to restrict; words are
+  ANDed, `"phrase"`, `OR`, `-word`; no stemming; hits are lean with a snippet,
+  `full: true` adds descriptions) with 1–3 keyword variants
   (and/or `kabai_list_tickets(project_id, summary: true)` for an overview).
   If a near-duplicate exists: `kabai_add_comment` on the existing ticket
   with your addition instead of creating a new one, or link the tickets
@@ -184,14 +186,16 @@ Relations may cross projects. Remove wrong links with
 
 ## 9. Reading efficiently
 
-- Overviews: `kabai_list_tickets(project_id, summary: true, status_id?,
+- Overviews: `kabai_list_tickets(project_id, summary: true, status_id?, assignee?,
   limit?, offset?)` — summary omits descriptions; paginate instead of
   fetching everything.
 - Single ticket: `kabai_get_ticket` for a quick look;
   `kabai_get_ticket_detailed` only when you actually pick the ticket up —
   it returns tasks, relations, comments AND `linked_notes` (read those
   notes before starting; see docs chapter). Pass
-  `include_role_instruction: false` on repeat calls in the same session.
+  `include_role_instruction: false` on repeat calls in the same session and
+  `comments_limit: N` to read only the newest N comments (answer carries
+  `comments_total`).
 - `kabai_get_project(project_id)` for one project's metadata instead of
   listing all.
 

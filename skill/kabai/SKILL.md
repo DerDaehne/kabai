@@ -65,7 +65,8 @@ and improvise.
 
 ## Golden rules — tickets
 
-1. **Search before create.** `kabai_search_tickets` first; comment on a
+1. **Search before create.** `kabai_search_tickets` first (all projects unless
+   `project_id` is given; lean ranked hits, `full: true` for descriptions); comment on a
    near-duplicate instead of creating a twin.
 2. **Full descriptions.** Scope, references, effort estimate (XS–XL),
    observable acceptance criteria. Title-only tickets are not workable —
@@ -74,7 +75,8 @@ and improvise.
 3. **Assign immediately.** `kabai_assign_ticket` right after creating or
    picking up a ticket. Never work unassigned tickets.
 4. **One task per acceptance criterion** (`kabai_add_task`);
-   `kabai_complete_task` immediately when met, never batched at the end.
+   `kabai_complete_task` immediately when met, never batched at the end
+   (`kabai_complete_tasks` only for criteria that were met at the same time).
 5. **Comment the work log** (`kabai_add_comment`): pickup, decisions,
    blockers, and a completion comment with real verification output.
 6. **Move only along the transition graph** (`kabai_move_ticket`). The DB
@@ -142,7 +144,8 @@ and improvise.
 
 - `summary: true` + `limit`/`offset` for all listings; `body_chars` tells
   you a note's retrieval cost before `get_note`.
-- `kabai_get_ticket_detailed` only on pickup; pass
+- `kabai_get_ticket_detailed` only on pickup; pass `comments_limit: N` for
+  only the newest N comments and
   `include_role_instruction: false` on repeat calls.
 - Discover knowledge entry points via
   `kabai_docs_list_notes(kind: "hub", summary: true)`.

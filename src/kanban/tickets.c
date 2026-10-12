@@ -223,12 +223,13 @@ static Ticket **parse_ticket_rows(PGresult *res) {
 }
 
 Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id,
-                               const char *type_filter, int limit, int offset) {
+                               const char *type_filter, const char *assignee_filter,
+                               int limit, int offset) {
     if (!db) return NULL;
 
     /* Build query dynamically to avoid combinatorial explosion of variants */
     char query[512];
-    const char *params[6];
+    const char *params[7];
     int nparams = 0;
     char proj_str[32], sid_str[32], lim_str[32], off_str[32];
 
@@ -256,6 +257,13 @@ Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status
         if (qpos < 0 || qpos >= (int)sizeof(query)) return NULL;
     }
 
+    if (assignee_filter && assignee_filter[0]) {
+        params[nparams++] = assignee_filter;
+        qpos += snprintf(query + qpos, sizeof(query) - qpos,
+                         " AND assignee = $%d", nparams);
+        if (qpos < 0 || qpos >= (int)sizeof(query)) return NULL;
+    }
+
     qpos += snprintf(query + qpos, sizeof(query) - qpos, " ORDER BY created_at");
     if (qpos < 0 || qpos >= (int)sizeof(query)) return NULL;
 
@@ -270,39 +278,6 @@ Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status
     }
 
     PGresult *res = PQexecParams(db->conn, query, nparams, NULL, params, NULL, NULL, 0);
-    if (!res || PQntuples(res) == 0) {
-        if (res) PQclear(res);
-        return NULL;
-    }
-    return parse_ticket_rows(res);
-}
-
-Ticket **ticket_search(DatabaseConnection *db, int project_id, const char *query) {
-    if (!db || !query) return NULL;
-
-    char proj_str[32];
-    snprintf(proj_str, sizeof(proj_str), "%d", project_id);
-
-    /* Wrap query in % for ILIKE pattern matching */
-    size_t qlen = strlen(query);
-    char *pattern = malloc(qlen + 3);
-    if (!pattern) return NULL;
-    pattern[0] = '%';
-    memcpy(pattern + 1, query, qlen);
-    pattern[qlen + 1] = '%';
-    pattern[qlen + 2] = '\0';
-
-    const char *p[2] = {proj_str, pattern};
-    PGresult *res = PQexecParams(db->conn,
-        "SELECT id, project_id, status_id, type, title, description, assignee,"
-        "       created_at::text, updated_at::text,"
-        "       effort_estimate::text, effort_actual::text, effort_unit"
-        " FROM tickets WHERE project_id = $1"
-        "   AND (title ILIKE $2 OR description ILIKE $2)"
-        " ORDER BY created_at LIMIT 50",
-        2, NULL, p, NULL, NULL, 0);
-    free(pattern);
-
     if (!res || PQntuples(res) == 0) {
         if (res) PQclear(res);
         return NULL;

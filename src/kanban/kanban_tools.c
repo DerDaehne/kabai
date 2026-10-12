@@ -179,9 +179,11 @@ static cJSON *tool_list_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
     param_num(params, "limit", &limit);
     param_num(params, "offset", &offset);
     const char *type_filter = param_str(params, "type");
+    const char *assignee_filter = param_str(params, "assignee");
     bool summary = param_bool(params, "summary", false);
 
-    Ticket **tickets = ticket_list_filtered(ctx->db, project_id, status_id, type_filter, limit, offset);
+    Ticket **tickets = ticket_list_filtered(ctx->db, project_id, status_id, type_filter,
+                                            assignee_filter, limit, offset);
     cJSON *arr = cJSON_CreateArray();
     if (!tickets) return mcp_tool_ok(id, arr);
 
@@ -212,38 +214,115 @@ static cJSON *tool_list_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
     return mcp_tool_ok(id, arr);
 }
 
-static cJSON *tool_search_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
-    int project_id;
-    const char *query = param_str(params, "query");
-    if (!param_num(params, "project_id", &project_id) || !query)
-        return mcp_tool_err(id, "Missing required parameters: project_id, query");
+/* Full-text ticket search (#905, #973). Lean rows by default; full:true adds
+ * the description and bookkeeping fields. Result columns of both queries:
+ * 0 id, 1 project_id, 2 status_id, 3 status_name, 4 type, 5 title, 6 assignee,
+ * 7 rank, 8 snippet, 9 description, 10-12 effort estimate/actual/unit,
+ * 13 created_at, 14 updated_at. */
+#define TICKET_SEARCH_COLS \
+    "t.id, t.project_id, t.status_id, bs.name, t.type, t.title, t.assignee, "
+#define TICKET_SEARCH_TAIL \
+    "t.description, t.effort_estimate::text, t.effort_actual::text, t.effort_unit, " \
+    "t.created_at::text, t.updated_at::text " \
+    "FROM tickets t JOIN board_statuses bs ON bs.id = t.status_id "
 
-    Ticket **tickets = ticket_search(ctx->db, project_id, query);
+static cJSON *search_ticket_rows_to_json(PGresult *res, const char *match_type, bool full) {
     cJSON *arr = cJSON_CreateArray();
-    if (!tickets) return mcp_tool_ok(id, arr);
-
-    for (int i = 0; tickets[i]; i++) {
+    for (int i = 0; i < PQntuples(res); i++) {
         cJSON *o = cJSON_CreateObject();
-        cJSON_AddNumberToObject(o, "id", tickets[i]->id);
-        cJSON_AddNumberToObject(o, "project_id", tickets[i]->project_id);
-        cJSON_AddNumberToObject(o, "status_id", tickets[i]->status_id);
-        cJSON_AddStringToObject(o, "type", tickets[i]->type ? tickets[i]->type : "ticket");
-        cJSON_AddStringToObject(o, "title", tickets[i]->title);
-        if (tickets[i]->description)
-            cJSON_AddStringToObject(o, "description", tickets[i]->description);
-        if (tickets[i]->assignee)
-            cJSON_AddStringToObject(o, "assignee", tickets[i]->assignee);
-        if (tickets[i]->effort_estimate)
-            cJSON_AddNumberToObject(o, "effort_estimate", atof(tickets[i]->effort_estimate));
-        if (tickets[i]->effort_actual)
-            cJSON_AddNumberToObject(o, "effort_actual", atof(tickets[i]->effort_actual));
-        if (tickets[i]->effort_unit)
-            cJSON_AddStringToObject(o, "effort_unit", tickets[i]->effort_unit);
-        if (tickets[i]->created_at)
-            cJSON_AddStringToObject(o, "created_at", tickets[i]->created_at);
+        cJSON_AddNumberToObject(o, "id", atoi(PQgetvalue(res, i, 0)));
+        cJSON_AddNumberToObject(o, "project_id", atoi(PQgetvalue(res, i, 1)));
+        cJSON_AddNumberToObject(o, "status_id", atoi(PQgetvalue(res, i, 2)));
+        cJSON_AddStringToObject(o, "status_name", PQgetvalue(res, i, 3));
+        cJSON_AddStringToObject(o, "type", PQgetvalue(res, i, 4));
+        cJSON_AddStringToObject(o, "title", PQgetvalue(res, i, 5));
+        if (!PQgetisnull(res, i, 6))
+            cJSON_AddStringToObject(o, "assignee", PQgetvalue(res, i, 6));
+        cJSON_AddNumberToObject(o, "rank", atof(PQgetvalue(res, i, 7)));
+        cJSON_AddStringToObject(o, "match_type", match_type);
+        cJSON_AddStringToObject(o, "snippet", PQgetvalue(res, i, 8));
+        if (full) {
+            if (!PQgetisnull(res, i, 9))
+                cJSON_AddStringToObject(o, "description", PQgetvalue(res, i, 9));
+            if (!PQgetisnull(res, i, 10))
+                cJSON_AddNumberToObject(o, "effort_estimate", atof(PQgetvalue(res, i, 10)));
+            if (!PQgetisnull(res, i, 11))
+                cJSON_AddNumberToObject(o, "effort_actual", atof(PQgetvalue(res, i, 11)));
+            if (!PQgetisnull(res, i, 12))
+                cJSON_AddStringToObject(o, "effort_unit", PQgetvalue(res, i, 12));
+            cJSON_AddStringToObject(o, "created_at", PQgetvalue(res, i, 13));
+            cJSON_AddStringToObject(o, "updated_at", PQgetvalue(res, i, 14));
+        }
         cJSON_AddItemToArray(arr, o);
     }
-    ticket_free_array(tickets);
+    return arr;
+}
+
+static cJSON *tool_search_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
+    const char *query = param_str(params, "query");
+    if (!query || query[0] == '\0')
+        return mcp_tool_err(id, "Missing required parameter: query");
+
+    int project_id = 0, limit = 0;
+    param_num(params, "project_id", &project_id);
+    param_num(params, "limit", &limit);
+    bool full = param_bool(params, "full", false);
+
+    char proj_str[32], limit_str[32];
+    snprintf(proj_str, sizeof(proj_str), "%d", project_id);
+    snprintf(limit_str, sizeof(limit_str), "%d", limit);
+    const char *q_params[3] = {
+        query,
+        project_id > 0 ? proj_str : NULL,
+        limit > 0 ? limit_str : NULL
+    };
+
+    /* ponytail: the tsvector is computed per row on the fly (no column, no
+     * index), fine for a few thousand tickets. Upgrade path: a migration with
+     * a generated tickets.search_tsv column (title A, description C) plus a
+     * GIN index, then match against that column here. */
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "SELECT " TICKET_SEARCH_COLS
+        "       ts_rank(v.tsv, q)::text, "
+        "       ts_headline('simple', COALESCE(t.description, t.title), q, "
+        "                   'MaxWords=20, MinWords=5, MaxFragments=1'), "
+        TICKET_SEARCH_TAIL
+        ", websearch_to_tsquery('simple', $1) q, "
+        "  LATERAL (SELECT setweight(to_tsvector('simple', t.title), 'A') || "
+        "                  setweight(to_tsvector('simple', COALESCE(t.description, '')), 'C') "
+        "                  AS tsv) v "
+        "WHERE v.tsv @@ q AND ($2::int IS NULL OR t.project_id = $2) "
+        "ORDER BY ts_rank(v.tsv, q) DESC, t.id DESC "
+        "LIMIT COALESCE($3::int, 20)",
+        3, NULL, q_params, NULL, NULL, 0);
+
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id,
+            "Search failed: use plain words, \"quoted phrases\", OR and -exclusions");
+    }
+    if (PQntuples(res) > 0) {
+        cJSON *arr = search_ticket_rows_to_json(res, "fts", full);
+        PQclear(res);
+        return mcp_tool_ok(id, arr);
+    }
+    PQclear(res);
+
+    /* Fallback: trigram similarity on titles catches typos and partial words. */
+    res = PQexecParams(ctx->db->conn,
+        "SELECT " TICKET_SEARCH_COLS
+        "       similarity(t.title, $1)::text, left(COALESCE(t.description, t.title), 160), "
+        TICKET_SEARCH_TAIL
+        "WHERE t.title % $1 AND ($2::int IS NULL OR t.project_id = $2) "
+        "ORDER BY similarity(t.title, $1) DESC, t.id DESC "
+        "LIMIT COALESCE($3::int, 20)",
+        3, NULL, q_params, NULL, NULL, 0);
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id, "Search failed");
+    }
+    cJSON *arr = search_ticket_rows_to_json(res, "title_similarity", full);
+    PQclear(res);
     return mcp_tool_ok(id, arr);
 }
 
@@ -326,9 +405,15 @@ static cJSON *tool_get_ticket_detailed(McpContext *ctx, cJSON *id, cJSON *params
         }
     }
 
+    int comments_total = 0, comments_limit = 0;
+    while (d->comments && d->comments[comments_total]) comments_total++;
+    param_num(params, "comments_limit", &comments_limit);
+    int comments_from = (comments_limit > 0 && comments_total > comments_limit)
+                        ? comments_total - comments_limit : 0;
+
     cJSON *comments_arr = cJSON_CreateArray();
     if (d->comments) {
-        for (int i = 0; d->comments[i]; i++) {
+        for (int i = comments_from; d->comments[i]; i++) {
             cJSON *cj = cJSON_CreateObject();
             cJSON_AddNumberToObject(cj, "id", d->comments[i]->id);
             cJSON_AddStringToObject(cj, "author", d->comments[i]->author);
@@ -433,6 +518,8 @@ static cJSON *tool_get_ticket_detailed(McpContext *ctx, cJSON *id, cJSON *params
     cJSON_AddItemToObject(r, "tasks", tasks_arr);
     cJSON_AddItemToObject(r, "relations", relations_arr);
     cJSON_AddItemToObject(r, "comments", comments_arr);
+    if (comments_from > 0)
+        cJSON_AddNumberToObject(r, "comments_total", comments_total);
     cJSON_AddItemToObject(r, "linked_notes", notes_arr);
     cJSON_AddItemToObject(r, "attachments", attachments_arr);
 
@@ -744,6 +831,30 @@ static cJSON *tool_complete_task(McpContext *ctx, cJSON *id, cJSON *params) {
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
+    return mcp_tool_ok(id, r);
+}
+
+
+static cJSON *tool_complete_tasks(McpContext *ctx, cJSON *id, cJSON *params) {
+    cJSON *ids_j = cJSON_GetObjectItemCaseSensitive(params, "task_ids");
+    if (!cJSON_IsArray(ids_j))
+        return mcp_tool_err(id, "Missing required parameter: task_ids (array of task IDs "
+                                "from kabai_get_ticket_detailed)");
+
+    int total = cJSON_GetArraySize(ids_j), done = 0;
+    cJSON *not_found = cJSON_CreateArray();
+    for (int i = 0; i < total; i++) {
+        cJSON *item = cJSON_GetArrayItem(ids_j, i);
+        if (cJSON_IsNumber(item) && ticket_complete_task(ctx->db, item->valueint))
+            done++;
+        else
+            cJSON_AddItemToArray(not_found, cJSON_CreateNumber(cJSON_IsNumber(item) ? item->valueint : 0));
+    }
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddNumberToObject(r, "total", total);
+    cJSON_AddNumberToObject(r, "completed", done);
+    cJSON_AddItemToObject(r, "not_found", not_found);
     return mcp_tool_ok(id, r);
 }
 
@@ -1115,22 +1226,34 @@ void kanban_register_tools(McpRegistry *r) {
     schema_num(s, "project_id", "ID of the project to list tickets from", true);
     schema_num(s, "status_id",  "Filter by status column (optional)", false);
     schema_str(s, "type",       "Filter by type: 'ticket' or 'epic' (optional)", false);
+    schema_str(s, "assignee",   "Filter by exact assignee name, e.g. to resume your own work (optional)", false);
     schema_num(s, "limit",      "Max tickets to return (optional, default unlimited)", false);
     schema_num(s, "offset",     "Tickets to skip for pagination (optional, default 0)", false);
     schema_bool(s, "summary",
         "If true, omit description fields — returns only id/status_id/title/assignee/timestamps. "
         "Use for an overview when descriptions are not needed.", false);
     mcp_registry_add(r, "kabai_list_tickets",
-        "List tickets in a project. Supports status filter, pagination (limit/offset), "
+        "List tickets in a project. Supports status, type and assignee filters, pagination (limit/offset), "
         "and summary mode (omits description). Use summary:true + status_id for cheap overview calls.",
         s, tool_list_tickets);
 
     s = schema_new();
-    schema_num(s, "project_id", "ID of the project to search in", true);
-    schema_str(s, "query",      "Search string matched case-insensitively against title and description", true);
+    schema_str(s, "query",
+        "Search words. Several words must all match (anywhere, any order); "
+        "\"quoted phrase\", OR, -excluded. No stemming: exact word forms only.", true);
+    schema_num(s, "project_id", "Restrict to one project (optional, default: search all projects)", false);
+    schema_num(s, "limit", "Max results (optional, default 20)", false);
+    schema_bool(s, "full",
+        "If true, also return description, effort fields and timestamps per hit "
+        "(optional, default false: lean rows only)", false);
     mcp_registry_add(r, "kabai_search_tickets",
-        "Search tickets by title/description substring (ILIKE). Returns up to 50 matches. "
-        "Use before create_ticket to detect duplicates.",
+        "Full-text search over ticket title and description, ranked by relevance (title "
+        "hits first). Returns lean rows: id, project_id, status_id, status_name, type, "
+        "title, assignee, rank, match_type (fts, or title_similarity as typo-tolerant "
+        "fallback when nothing matches) and a snippet around the match. Pass full:true "
+        "for descriptions. Searches all projects unless project_id is given. Use BEFORE "
+        "create_ticket to detect duplicates. Changed: the default answer no longer "
+        "contains descriptions, and the query is no longer a plain substring.",
         s, tool_search_tickets);
 
     s = schema_new();
@@ -1144,6 +1267,10 @@ void kanban_register_tools(McpRegistry *r) {
         "Include agent_role_instruction in response (default true). "
         "Pass false after the first call to avoid repeating the same instruction for tickets in the same column.",
         false);
+    schema_num(s, "comments_limit",
+        "Return only the newest N work-log comments (optional, default: all). When "
+        "older ones are cut, the answer carries comments_total; read them via "
+        "kabai_list_comments.", false);
     mcp_registry_add(r, "kabai_get_ticket_detailed",
         "Get ticket with all tasks (acceptance criteria), work log, timestamps, "
         "linked knowledge-base notes (linked_notes — read them via kabai_docs_get_note "
@@ -1250,6 +1377,14 @@ void kanban_register_tools(McpRegistry *r) {
     schema_num(s, "task_id", "Numeric task ID (from get_ticket_detailed)", true);
     mcp_registry_add(r, "kabai_complete_task",
         "Mark an acceptance criterion task as completed", s, tool_complete_task);
+
+    s = schema_new();
+    schema_num_array(s, "task_ids", "Array of task IDs (from get_ticket_detailed)", true);
+    mcp_registry_add(r, "kabai_complete_tasks",
+        "Batch version of complete_task: mark several acceptance criteria completed in one "
+        "call. Returns total, completed and not_found (IDs that do not exist or were not "
+        "numbers).",
+        s, tool_complete_tasks);
 
     /* ---- Comments / Work Log ---- */
 
