@@ -1,6 +1,7 @@
 /*
  * MCP adapter for the attachments module (V13__Attachments.sql, ticket #468):
- * registers the kabai_get_attachment tool with the framework registry.
+ * registers kabai_get_attachment, kabai_add_attachment and kabai_delete_attachment
+ * with the framework registry.
  *
  * Ticket-facing attachment metadata (the `attachments` array on
  * kabai_get_ticket_detailed) is implemented in src/kanban/kanban_tools.c —

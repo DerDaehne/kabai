@@ -110,7 +110,8 @@ it is the alt-text other agents read instead of fetching the image. Only
 PNG/JPEG/WebP/GIF up to 10 MiB are accepted, detected from the file's
 bytes (never the extension); convert or shrink anything else first. Do not
 attach files that are not meant to be shared. `kabai_delete_attachment`
-with `ticket_id` only unlinks from that ticket; without it the attachment
+with `ticket_id` unlinks it from that ticket (the image is deleted too if that
+was its last reference); without it the attachment
 is deleted unless a canvas element uses it.
 
 ## Golden rules — knowledge base

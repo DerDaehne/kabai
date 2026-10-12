@@ -176,10 +176,13 @@ static unsigned char *read_image_file(const char *path, size_t *out_len, const c
         if (r <= 0) break;
         got += (size_t)r;
     }
+    /* One byte past st_size must be EOF, else the file grew and we hold a truncated image. */
+    char extra;
+    bool grew = buf && got == want && read(fd, &extra, 1) != 0;
     close(fd);
-    if (!buf || got != want) {
+    if (!buf || got != want || grew) {
         free(buf);
-        *err = "Could not read the whole file (it changed while reading?): retry";
+        *err = "File changed while reading; retry once it is fully written";
         return NULL;
     }
     *out_len = want;
@@ -248,12 +251,21 @@ static cJSON *tool_add_attachment(McpContext *ctx, cJSON *id, cJSON *params) {
     /* Filename: caller value or path basename, directories stripped. */
     const char *name = param_str(params, "filename");
     if (!name || !*name) name = (path && *path) ? path : NULL;
-    char fname[256];
+    char fname[4096];
     if (name) {
         const char *slash = strrchr(name, '/');
         const char *bslash = strrchr(name, '\\');
         if (bslash && (!slash || bslash > slash)) slash = bslash;
-        snprintf(fname, sizeof(fname), "%s", slash ? slash + 1 : name);
+        const char *base = slash ? slash + 1 : name;
+        snprintf(fname, sizeof(fname), "%s", base);
+        size_t n = strlen(base);
+        if (n >= sizeof(fname)) {  /* cut on a character boundary, not inside UTF-8 */
+            n = sizeof(fname) - 1;
+            while (n > 0 && ((unsigned char)fname[n] & 0xC0) == 0x80) n--;
+            fname[n] = '\0';
+        }
+        for (char *c = fname; *c; c++)
+            if ((unsigned char)*c < 0x20 || *c == 0x7F) *c = '_';
     } else {
         fname[0] = '\0';
     }
@@ -281,7 +293,7 @@ static cJSON *tool_add_attachment(McpContext *ctx, cJSON *id, cJSON *params) {
     int formats[6] = {0, 0, 0, 1, 0, 0};
     PGresult *res = PQexecParams(ctx->db->conn,
         "INSERT INTO attachments (filename, mime_type, size_bytes, data, description, uploaded_by) "
-        "VALUES ($1, $2, $3::int, $4::bytea, $5, $6) RETURNING id",
+        "VALUES (left($1, 255), $2, $3::int, $4::bytea, $5, $6) RETURNING id, filename",
         6, NULL, vals, lens, formats, 0);
     free(data);
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
@@ -291,6 +303,8 @@ static cJSON *tool_add_attachment(McpContext *ctx, cJSON *id, cJSON *params) {
         return mcp_tool_err(id, msg ? msg : "Failed to store attachment");
     }
     int att_id = atoi(PQgetvalue(res, 0, 0));
+    char stored_name[1100];  // 255 characters, up to 4 bytes each
+    snprintf(stored_name, sizeof(stored_name), "%s", PQgetvalue(res, 0, 1));
     PQclear(res);
 
     char aid[32];
@@ -313,7 +327,7 @@ static cJSON *tool_add_attachment(McpContext *ctx, cJSON *id, cJSON *params) {
     cJSON *r = cJSON_CreateObject();
     cJSON_AddNumberToObject(r, "attachment_id", att_id);
     cJSON_AddNumberToObject(r, "ticket_id", ticket_id);
-    cJSON_AddStringToObject(r, "filename", fname);
+    cJSON_AddStringToObject(r, "filename", stored_name);
     cJSON_AddStringToObject(r, "mime_type", mime);
     cJSON_AddNumberToObject(r, "size_bytes", (double)len);
     return mcp_tool_ok(id, r);
@@ -326,13 +340,15 @@ static cJSON *tool_add_attachment(McpContext *ctx, cJSON *id, cJSON *params) {
 /* Canvas image elements reference attachments via content->>'attachment_id'
  * with no FK (V13), so every delete path has to look there itself. */
 #define CANVAS_REF_SQL \
-    "SELECT id, canvas_id FROM canvas_elements WHERE content->>'attachment_id' = $1 ORDER BY id LIMIT 1"
+    "SELECT id, canvas_id FROM canvas_elements WHERE content->'attachment_id' IN (to_jsonb($1::int), to_jsonb($1::text)) ORDER BY id LIMIT 1"
 
 static cJSON *tool_delete_attachment(McpContext *ctx, cJSON *id, cJSON *params) {
     int att_id, ticket_id = 0;
     if (!param_num(params, "attachment_id", &att_id))
         return mcp_tool_err(id, "Missing required parameter: attachment_id");
     bool with_ticket = param_num(params, "ticket_id", &ticket_id);
+    if (!with_ticket && param_present(params, "ticket_id"))
+        return mcp_tool_err(id, "ticket_id must be a number");
 
     char aid[32], tid[32];
     snprintf(aid, sizeof(aid), "%d", att_id);
@@ -345,7 +361,7 @@ static cJSON *tool_delete_attachment(McpContext *ctx, cJSON *id, cJSON *params) 
     if (!db_begin_transaction(ctx->db))
         return mcp_tool_err(id, "Failed to start transaction");
 
-    PGresult *res = PQexecParams(ctx->db->conn, "SELECT 1 FROM attachments WHERE id = $1", 1, NULL, ap, NULL, NULL, 0);
+    PGresult *res = PQexecParams(ctx->db->conn, "SELECT 1 FROM attachments WHERE id = $1 FOR UPDATE", 1, NULL, ap, NULL, NULL, 0);
     bool exists = res && PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0;
     if (res) PQclear(res);
     if (!exists) { db_rollback_transaction(ctx->db); return mcp_tool_err(id, "Attachment not found"); }
@@ -370,7 +386,7 @@ static cJSON *tool_delete_attachment(McpContext *ctx, cJSON *id, cJSON *params) 
         res = PQexecParams(ctx->db->conn,
             "DELETE FROM attachments a WHERE a.id = $1::int "
             "  AND NOT EXISTS (SELECT 1 FROM ticket_attachments WHERE attachment_id = a.id) "
-            "  AND NOT EXISTS (SELECT 1 FROM canvas_elements WHERE content->>'attachment_id' = $1::text)",
+            "  AND NOT EXISTS (SELECT 1 FROM canvas_elements WHERE content->'attachment_id' IN (to_jsonb($1::int), to_jsonb($1::text)))",
             1, NULL, ap, NULL, NULL, 0);
         ok = res && PQresultStatus(res) == PGRES_COMMAND_OK;
         deleted = ok && atoi(PQcmdTuples(res)) > 0;
@@ -443,7 +459,7 @@ void attachments_register_tools(McpRegistry *r) {
 
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID to attach the image to", true);
-    schema_str(s, "file_path", "Absolute path of a local image file (preferred: no base64 through the context). "
+    schema_str(s, "file_path", "Path of a local image file (absolute; a relative path resolves against the server process working directory) (preferred: no base64 through the context). "
         "Exactly one of file_path / data_base64", false);
     schema_str(s, "data_base64", "Standard base64 of the image bytes. Exactly one of file_path / data_base64", false);
     schema_str(s, "filename", "Display filename (default: basename of file_path)", false);
