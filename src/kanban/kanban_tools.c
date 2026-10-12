@@ -187,6 +187,25 @@ static cJSON *tool_list_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
     bool summary = param_bool(params, "summary", false);
     bool workable = param_bool(params, "workable", false);
 
+    if (workable) {
+        char pid[32];
+        snprintf(pid, sizeof(pid), "%d", project_id);
+        const char *qp[1] = {pid};
+        PGresult *ar = PQexecParams(ctx->db->conn,
+            "SELECT archived FROM projects WHERE id = $1", 1, NULL, qp, NULL, NULL, 0);
+        bool archived = ar && PQresultStatus(ar) == PGRES_TUPLES_OK && PQntuples(ar) > 0 &&
+                        PQgetvalue(ar, 0, 0)[0] == 't';
+        if (ar) PQclear(ar);
+        if (archived) {
+            cJSON *r = cJSON_CreateObject();
+            cJSON_AddItemToObject(r, "tickets", cJSON_CreateArray());
+            cJSON_AddStringToObject(r, "hint",
+                "Project is archived and read-only: nothing can be picked up. "
+                "look in an active project (kabai_list_projects)");
+            return mcp_tool_ok(id, r);
+        }
+    }
+
     Ticket **tickets = ticket_list_filtered(ctx->db, project_id, status_id, type_filter,
                                             assignee_filter, workable, limit, offset);
     cJSON *arr = cJSON_CreateArray();
@@ -202,10 +221,11 @@ static cJSON *tool_list_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
             "SELECT tt.ticket_id, count(*) FROM ticket_tasks tt JOIN tickets t ON t.id = tt.ticket_id "
             "WHERE t.project_id = $1 AND NOT tt.is_completed GROUP BY tt.ticket_id",
             1, NULL, qp, NULL, NULL, 0);
-        open_tasks = cJSON_CreateObject();
-        if (cr && PQresultStatus(cr) == PGRES_TUPLES_OK)
+        if (cr && PQresultStatus(cr) == PGRES_TUPLES_OK) {
+            open_tasks = cJSON_CreateObject();
             for (int k = 0; k < PQntuples(cr); k++)
                 cJSON_AddNumberToObject(open_tasks, PQgetvalue(cr, k, 0), atoi(PQgetvalue(cr, k, 1)));
+        }
         if (cr) PQclear(cr);
     }
 
@@ -618,9 +638,13 @@ static cJSON *tool_move_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
 static cJSON *tool_move_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
     cJSON *ids_j = cJSON_GetObjectItemCaseSensitive(params, "ticket_ids");
     int new_status_id;
-    if (!cJSON_IsArray(ids_j) || !param_num_alias(params, "new_status_id", "status_id", &new_status_id))
-        return mcp_tool_err(id, !cJSON_IsArray(ids_j) ? "Missing required parameters: ticket_ids (array)"
-                                                      : "Missing required parameters: new_status_id");
+    bool ok[2] = {cJSON_IsArray(ids_j),
+                  param_num_alias(params, "new_status_id", "status_id", &new_status_id)};
+    if (!ok[0] || !ok[1]) {
+        const char *names[2] = {"ticket_ids (array)", "new_status_id"};
+        char buf[120];
+        return mcp_tool_err(id, missing_params_msg(buf, sizeof(buf), names, ok, 2));
+    }
 
     int total   = cJSON_GetArraySize(ids_j);
     int success = 0;
@@ -851,6 +875,12 @@ static cJSON *tool_link_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
+    const char *given = param_str_alias(params, "relation_type", "link_type");
+    if (given && strcmp(given, "blocked_by") == 0) {  /* show the swap */
+        cJSON_AddNumberToObject(r, "from_ticket_id", from_id);
+        cJSON_AddNumberToObject(r, "to_ticket_id", to_id);
+        cJSON_AddStringToObject(r, "relation_type", rel);
+    }
     return mcp_tool_ok(id, r);
 }
 
@@ -1080,6 +1110,38 @@ static cJSON *tool_delete_status_transition(McpContext *ctx, cJSON *id, cJSON *p
         return mcp_tool_err(id, missing_params_msg(buf, sizeof(buf), names, ok, 3));
     }
 
+    /* Guard the escalation exit: a ticket in human_intervention must keep an
+     * explicit edge out (to human_answered), otherwise it can never leave. */
+    char gp[32], gf[32], gt[32];
+    snprintf(gp, sizeof(gp), "%d", project_id);
+    snprintf(gf, sizeof(gf), "%d", from_id);
+    snprintf(gt, sizeof(gt), "%d", to_id);
+    const char *gq[3] = {gp, gf, gt};
+    bool from_is_hi = false, still_implicit = false;
+    PGresult *g = PQexecParams(ctx->db->conn,
+        "SELECT f.special_type = 'human_intervention', "
+        "       t.special_type = 'human_intervention' OR f.special_type = 'human_answered', "
+        "       (SELECT count(*) FROM status_transitions s WHERE s.project_id = $1 "
+        "          AND s.from_status_id = $2 AND s.to_status_id <> $3), "
+        "       (SELECT count(*) FROM status_transitions s WHERE s.project_id = $1 "
+        "          AND s.from_status_id = $2 AND s.to_status_id = $3) "
+        "FROM board_statuses f, board_statuses t "
+        "WHERE f.id = $2 AND f.project_id = $1 AND t.id = $3 AND t.project_id = $1",
+        3, NULL, gq, NULL, NULL, 0);
+    if (g && PQresultStatus(g) == PGRES_TUPLES_OK && PQntuples(g) > 0) {
+        from_is_hi     = PQgetvalue(g, 0, 0)[0] == 't';
+        still_implicit = PQgetvalue(g, 0, 1)[0] == 't';
+        if (from_is_hi && atoi(PQgetvalue(g, 0, 2)) == 0 && atoi(PQgetvalue(g, 0, 3)) == 1) {
+            PQclear(g);
+            return mcp_tool_err(id,
+                "Refused: this is the last explicit edge out of a human_intervention column; "
+                "tickets escalated there could never leave (escalation flow: human_intervention -> "
+                "human_answered -> any column). Create the replacement edge first with "
+                "kabai_create_status_transition, then delete this one");
+        }
+    }
+    if (g) PQclear(g);
+
     int n = status_transition_delete(ctx->db, project_id, from_id, to_id);
     if (n < 0)
         return kanban_db_error(ctx, id, "Failed to delete status transition");
@@ -1144,6 +1206,7 @@ static cJSON *tool_delete_status_transition(McpContext *ctx, cJSON *id, cJSON *p
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
     cJSON_AddNumberToObject(r, "tickets_in_source_column", in_source);
+    if (still_implicit) cJSON_AddBoolToObject(r, "still_allowed_implicitly", 1);
     return mcp_tool_ok(id, r);
 }
 

@@ -32,7 +32,8 @@ At the start of any session that touches kabai, in this order:
    any column), so the list covers every move the database accepts.
 5. To find work: `kabai_list_tickets(project_id, workable: true)` returns
    only pickup-ready tickets (unassigned, no open `blocks` predecessor, in
-   a column with an `agent_role_instruction`, with `open_tasks`). Do not
+   a column with an `agent_role_instruction`, no epics, with `open_tasks`;
+   the role-column rule applies only without `status_id`). Do not
    check predecessors one by one with `get_ticket_detailed`.
 
 **Archived projects are read-only.** `kabai_list_projects` excludes them by

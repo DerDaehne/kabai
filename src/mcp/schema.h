@@ -36,7 +36,7 @@ bool        param_present(cJSON *params, const char *name);
 bool        param_num_alias(cJSON *params, const char *name, const char *alias, int *out);
 const char *param_str_alias(cJSON *params, const char *name, const char *alias);
 
-/* "Missing required parameters: a, b" listing only entries with ok[i] false,
+/* "Missing required parameters: a, b" listing only entries with ok[i] false (missing or of the wrong type),
  * so a parameter that was passed is never reported missing (#970). */
 const char *missing_params_msg(char *buf, size_t size, const char *const *names,
                                const bool *ok, int count);

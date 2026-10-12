@@ -267,7 +267,8 @@ Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status
     if (workable) {
         /* Pickup-ready (#799): unassigned, in a column agents may pick up from
          * (not done, not human_*; without an explicit status_id only columns
-         * with a role instruction), and no blocks predecessor outside done. */
+         * with a role instruction), no epics unless type is given, and no blocks
+         * predecessor outside done. */
         qpos += snprintf(query + qpos, sizeof(query) - qpos,
             " AND (assignee IS NULL OR assignee = '')"
             " AND status_id IN (SELECT id FROM board_statuses WHERE project_id = $1"
@@ -276,8 +277,9 @@ Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status
             "   JOIN tickets b ON b.id = r.from_ticket_id"
             "   JOIN board_statuses bs ON bs.id = b.status_id"
             "   WHERE r.to_ticket_id = tickets.id AND r.relation_type = 'blocks'"
-            "   AND bs.name <> 'done')",
-            status_id > 0 ? "" : " AND COALESCE(agent_role_instruction, '') <> ''");
+            "   AND bs.name <> 'done')%s",
+            status_id > 0 ? "" : " AND COALESCE(agent_role_instruction, '') <> ''",
+            (type_filter && type_filter[0]) ? "" : " AND type <> 'epic'");
         if (qpos < 0 || qpos >= (int)sizeof(query)) return NULL;
     }
 
