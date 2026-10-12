@@ -137,6 +137,7 @@ kabai/
 | `kabai_link_tickets` / `kabai_unlink_tickets` | parent_of, blocks (from done before to starts; `blocked_by` as reverse reading), duplicate_of, relates_to; `link_type` is an alias of `relation_type` |
 | `kabai_add_task` / `kabai_complete_task` / `kabai_complete_tasks` | acceptance criteria (open tasks block done) |
 | `kabai_add_comment` / `kabai_list_comments` | work log |
+| `kabai_add_attachment` / `kabai_delete_attachment` / `kabai_get_attachment` | image attachments (PNG/JPEG/WebP/GIF, ≤ 10 MiB, type detected from bytes); upload by `file_path` or `data_base64`, `description` (alt-text) required; delete unlinks per ticket and removes unreferenced images |
 
 ### Knowledge base
 | Tool | Purpose |

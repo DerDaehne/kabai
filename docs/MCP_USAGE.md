@@ -217,9 +217,15 @@ not rely on third-party summaries of parameters — query `tools/list`.
 | Board setup | `list_board_statuses`, `create_board_status`, `update_board_status`, `list_status_transitions`, `create_status_transition`, `delete_status_transition` |
 | Tickets | `create_ticket`, `update_ticket`, `delete_ticket`, `list_tickets`, `search_tickets`, `get_ticket`, `get_ticket_detailed`, `move_ticket`, `move_tickets`, `assign_ticket`, `link_tickets`, `unlink_tickets` |
 | Tasks & work log | `add_task`, `update_task`, `complete_task`, `delete_task`, `add_comment`, `list_comments` |
+| Attachments | `add_attachment`, `delete_attachment`, `get_attachment` |
 | Knowledge base | `docs_create_note`, `docs_update_note`, `docs_archive_note`, `docs_get_note`, `docs_list_notes`, `docs_search`, `docs_link_notes`, `docs_unlink_notes`, `docs_link_ticket`, `docs_unlink_ticket`, `docs_verify_note`, `docs_suggest_for_ticket`, `docs_assign_project`, `docs_unassign_project` |
 
 (All names carry the `kabai_` prefix.)
+
+`add_attachment` reads `file_path` with the permissions of the server process (the
+same user as the agent). To keep arbitrary local files out of the shared
+database, the type is detected only from the file's bytes (PNG, JPEG, WebP, GIF),
+the path must be a regular file of at most 10 MiB, and anything else is rejected.
 
 Rule enforcement lives in PostgreSQL triggers, not in the server: illegal
 workflow moves, moving to `done` with open tasks, and closing a

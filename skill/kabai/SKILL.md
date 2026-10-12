@@ -13,6 +13,8 @@ Three tool families:
   tasks (acceptance criteria), comments (work log), ticket relations.
 - `kabai_docs_*` — atomic knowledge notes with typed links, connected to
   tickets.
+- `kabai_add_attachment` / `kabai_delete_attachment` / `kabai_get_attachment` —
+  image attachments on tickets (see "Golden rules — tickets").
 - `kabai_canvas_*` / `kabai_*_canvas_element` / `kabai_*_canvas_edge` —
   a whiteboard-like planning surface above epics (frames replace
   milestones), co-edited by humans and agents.
@@ -98,6 +100,18 @@ and improvise.
     have them, never invent one just to fill the field.
 11. **A write rejected because the project is archived is not a bug.**
     Do not retry or work around it — tell the human; only they reactivate.
+
+**Attachments (screenshots, prototype images).** Do not leave decision
+images in a scratch directory: attach them with
+`kabai_add_attachment(ticket_id, file_path, description)`. Prefer
+`file_path` (the server runs on your host; no base64 through your
+context); `data_base64` is the alternative. `description` is mandatory —
+it is the alt-text other agents read instead of fetching the image. Only
+PNG/JPEG/WebP/GIF up to 10 MiB are accepted, detected from the file's
+bytes (never the extension); convert or shrink anything else first. Do not
+attach files that are not meant to be shared. `kabai_delete_attachment`
+with `ticket_id` only unlinks from that ticket; without it the attachment
+is deleted unless a canvas element uses it.
 
 ## Golden rules — knowledge base
 
