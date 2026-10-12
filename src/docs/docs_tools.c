@@ -181,61 +181,134 @@ static cJSON *tool_docs_create_note(McpContext *ctx, cJSON *id, cJSON *params) {
     return mcp_tool_ok(id, note);
 }
 
-/* Markdown heading at the start of line [p, end): returns level 1..6 and sets
- * *text to the trimmed heading text, or 0 if the line is not a heading. */
-static int heading_level(const char *p, const char *end, char *text, size_t cap) {
+/* ATX heading at line [p, end) (0-3 leading spaces): returns level 1..6 and
+ * sets [*ts, *te) to the heading text without closing #s, else returns 0. */
+static int heading_level(const char *p, const char *end, const char **ts, const char **te) {
+    int sp = 0;
+    while (p < end && *p == ' ' && sp < 3) { p++; sp++; }
     int level = 0;
     while (p + level < end && p[level] == '#') level++;
-    if (level < 1 || level > 6 || p + level >= end || p[level] != ' ') return 0;
-    const char *s = p + level;
-    while (s < end && *s == ' ') s++;
-    while (end > s && (end[-1] == ' ' || end[-1] == '\r' || end[-1] == '\t')) end--;
-    snprintf(text, cap, "%.*s", (int)(end - s), s);
+    if (level < 1 || level > 6) return 0;
+    if (p + level < end && p[level] != ' ' && p[level] != '\t') return 0;
+    const char *s = p + level, *e = end;
+    while (s < e && (*s == ' ' || *s == '\t')) s++;
+    while (e > s && (e[-1] == ' ' || e[-1] == '\r' || e[-1] == '\t')) e--;
+    const char *c = e;
+    while (c > s && c[-1] == '#') c--;
+    if (c == s) e = s;  /* only closing #s */
+    else if (c < e && (c[-1] == ' ' || c[-1] == '\t')) {
+        e = c;
+        while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
+    }
+    *ts = s; *te = e;
     return level;
+}
+
+/* Fence marker (``` or ~~~, 0-3 leading spaces): returns run length (>=3) and
+ * sets *ch, else 0. */
+static int fence_run(const char *p, const char *end, char *ch) {
+    int sp = 0;
+    while (p < end && *p == ' ' && sp < 3) { p++; sp++; }
+    if (p >= end || (*p != '`' && *p != '~')) return 0;
+    *ch = *p;
+    int n = 0;
+    while (p + n < end && p[n] == *ch) n++;
+    return n >= 3 ? n : 0;
+}
+
+/* Setext underline (=== or ---, 0-3 leading spaces): returns 1 or 2, else 0. */
+static int setext_underline(const char *p, const char *end) {
+    int sp = 0;
+    while (p < end && *p == ' ' && sp < 3) { p++; sp++; }
+    if (p >= end || (*p != '=' && *p != '-')) return 0;
+    char c = *p;
+    while (p < end && *p == c) p++;
+    while (p < end && (*p == ' ' || *p == '\t' || *p == '\r')) p++;
+    return p == end ? (c == '=' ? 1 : 2) : 0;
+}
+
+static int line_blank(const char *p, const char *end) {
+    while (p < end && (*p == ' ' || *p == '\t' || *p == '\r')) p++;
+    return p == end;
 }
 
 /* Replace the content of the section under `heading` (e.g. "## Results") up to
  * the next heading of the same or higher level; everything else stays
- * byte-identical. Headings inside fenced code blocks are ignored. Returns a
+ * byte-identical. Only ATX headings ("## Title") can be targeted. Headings
+ * inside fenced code blocks are ignored; a Setext heading (underlined with
+ * === or ---) of the same or higher level ends the section. Returns a
  * malloc'd body, or NULL with a way-out message in err. */
 static char *replace_section(const char *body, const char *heading, const char *text,
                              char *err, size_t errcap) {
-    char want[256];
-    int want_level = heading_level(heading, heading + strlen(heading), want, sizeof(want));
+    const char *ws, *we;
+    int want_level = heading_level(heading, heading + strlen(heading), &ws, &we);
     if (!want_level) {
-        snprintf(err, errcap, "Invalid replace_section: must be a markdown heading line like \"## Title\"");
+        snprintf(err, errcap, "Invalid replace_section: must be an ATX markdown heading line like \"## Title\"");
         return NULL;
     }
 
     size_t len = strlen(body), sec_start = 0, sec_end = len;
-    int matches = 0, in_sec = 0, fenced = 0;
-    char avail[400] = "";
+    int matches = 0, in_sec = 0, fence_len = 0;
+    char fence_ch = 0;
+    size_t prev_pos = 0;
+    int lineno = 0;
+    int prev_text = 0;   /* previous line is plain paragraph text */
+    char avail[400] = "", dups[400] = "";
     for (size_t pos = 0; pos < len; ) {
         const char *line = body + pos;
+        lineno++;
         const char *nl = memchr(line, '\n', len - pos);
         size_t line_len = nl ? (size_t)(nl - line) : len - pos;
+        const char *lend = line + line_len;
         size_t next = pos + line_len + (nl ? 1 : 0);
-        if (strncmp(line, "```", 3) == 0 || strncmp(line, "~~~", 3) == 0) fenced = !fenced;
-        char htext[256];
-        int lvl = fenced ? 0 : heading_level(line, line + line_len, htext, sizeof(htext));
-        if (lvl) {
-            if (in_sec && lvl <= want_level) { sec_end = pos; in_sec = 0; }
-            if (lvl == want_level && strcmp(htext, want) == 0) {
-                if (++matches == 1) { sec_start = next; in_sec = 1; }
+        char ch;
+        int run = fence_run(line, lend, &ch);
+        if (fence_len) {
+            if (run >= fence_len && ch == fence_ch) {  /* closing: marker run + whitespace only */
+                const char *q = line;
+                while (q < lend && *q == ' ') q++;
+                while (q < lend && *q == fence_ch) q++;
+                if (line_blank(q, lend)) fence_len = 0;
             }
-            size_t used = strlen(avail);
-            if (used + 40 < sizeof(avail))
-                snprintf(avail + used, sizeof(avail) - used, "%s\"%.*s\"", used ? ", " : "", (int)line_len, line);
+            prev_text = 0;
+        } else if (run) {
+            fence_len = run; fence_ch = ch;
+            prev_text = 0;
+        } else {
+            const char *ts, *te;
+            int lvl = heading_level(line, lend, &ts, &te);
+            int su = (!lvl && prev_text) ? setext_underline(line, lend) : 0;
+            if (su) {
+                if (in_sec && su <= want_level) { sec_end = prev_pos; in_sec = 0; }
+                prev_text = 0;
+            } else if (lvl) {
+                if (in_sec && lvl <= want_level) { sec_end = pos; in_sec = 0; }
+                int hit = lvl == want_level && (size_t)(te - ts) == (size_t)(we - ws) &&
+                          memcmp(ts, ws, (size_t)(te - ts)) == 0;
+                if (hit && ++matches == 1) { sec_start = next; in_sec = 1; }
+                size_t used = strlen(avail);
+                if (used + 40 < sizeof(avail))
+                    snprintf(avail + used, sizeof(avail) - used, "%s\"%.*s\"", used ? ", " : "", (int)line_len, line);
+                if (hit) {
+                    used = strlen(dups);
+                    if (used + 40 < sizeof(dups))
+                        snprintf(dups + used, sizeof(dups) - used, "%s\"%.*s\" (line %d)", used ? ", " : "", (int)line_len, line, lineno);
+                }
+                prev_text = 0;
+            } else {
+                prev_text = !line_blank(line, lend);
+                prev_pos = pos;
+            }
         }
         pos = next;
     }
     if (matches != 1) {
         if (matches == 0)
-            snprintf(err, errcap, "Heading not found: %s. Headings in this note: %s. "
+            snprintf(err, errcap, "Heading not found: %s. ATX headings in this note: %s. "
                      "Use one of them verbatim, or use append.", heading, avail[0] ? avail : "(none)");
         else
             snprintf(err, errcap, "Heading is ambiguous (%d matches): %s. "
-                     "Rename one of them, or replace the whole body.", matches, heading);
+                     "Rename one of them, or replace the whole body.", matches, dups);
         return NULL;
     }
 
@@ -286,6 +359,10 @@ static cJSON *tool_docs_update_note(McpContext *ctx, cJSON *id, cJSON *params) {
         free(tags);
         return mcp_tool_err(id, "No updatable fields provided (title, body, append, replace_section, kind, tags)");
     }
+    if (append && !append[0]) {
+        free(tags);
+        return mcp_tool_err(id, "append must not be empty (nothing to append)");
+    }
     if ((body && (append || section)) || (append && section)) {
         free(tags);
         return mcp_tool_err(id, "Use only one of body, append, replace_section per call");
@@ -304,10 +381,13 @@ static cJSON *tool_docs_update_note(McpContext *ctx, cJSON *id, cJSON *params) {
     bool tx = append || section || expected;
     char *new_body = NULL;
     if (tx) {
-        db_begin_transaction(ctx->db);
+        if (!db_begin_transaction(ctx->db)) {
+            free(tags);
+            return mcp_tool_err(id, "Failed to start transaction");
+        }
         const char *sel_params[1] = {note_id_str};
         PGresult *cur = PQexecParams(ctx->db->conn,
-            "SELECT body, updated_at::text FROM notes WHERE id = $1 FOR UPDATE",
+            "SELECT body, updated_at::text FROM notes WHERE id = $1 FOR NO KEY UPDATE",
             1, NULL, sel_params, NULL, NULL, 0);
         if (!cur || PQresultStatus(cur) != PGRES_TUPLES_OK || PQntuples(cur) == 0) {
             bool missing = cur && PQresultStatus(cur) == PGRES_TUPLES_OK;
@@ -375,7 +455,10 @@ static cJSON *tool_docs_update_note(McpContext *ctx, cJSON *id, cJSON *params) {
         if (tx) return tx_fail(ctx, id, "Note not found");
         return mcp_tool_err(id, "Note not found");
     }
-    if (tx) db_commit_transaction(ctx->db);
+    if (tx && !db_commit_transaction(ctx->db)) {
+        PQclear(res);
+        return mcp_tool_err(id, "Failed to commit update; nothing was written, retry");
+    }
 
     cJSON *note = note_row_brief(res, 0);
     cJSON_AddStringToObject(note, "updated_at", PQgetvalue(res, 0, 6));
@@ -856,7 +939,7 @@ static cJSON *tool_docs_search(McpContext *ctx, cJSON *id, cJSON *params) {
         SEARCH_FILTERS
         "ORDER BY (lower(n.slug) = lower($1)) DESC, "
         "         starts_with(lower(n.slug), lower($1)) DESC, n.slug "
-        "LIMIT COALESCE($5::int, 20)",
+        "LIMIT GREATEST(1, COALESCE($5::int, 20) / 2)",
         5, NULL, q_params, NULL, NULL, 0);
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         if (res) PQclear(res);
@@ -1083,7 +1166,7 @@ void docs_register_tools(McpRegistry *r) {
     schema_str(s, "title", "New title (optional)", false);
     schema_str(s, "body",  "New markdown body, replaces the old one (optional)", false);
     schema_str(s, "append", "Markdown to append at the end of the existing body, after a blank line - no need to send the rest (optional; exclusive with body and replace_section)", false);
-    schema_str(s, "replace_section", "Heading line of the section to replace, verbatim incl. level, e.g. \"## Results\". Replaces the text up to the next heading of the same or higher level; the rest stays byte-identical. Errors list the available headings if missing or ambiguous (optional; needs section_body)", false);
+    schema_str(s, "replace_section", "Heading line of the section to replace, verbatim incl. level, e.g. \"## Results\". ATX headings only (no underlined Setext). Replaces the text up to the next heading of the same or higher level; the rest stays byte-identical. Errors list the available headings if missing or ambiguous (optional; needs section_body)", false);
     schema_str(s, "section_body", "New content of the section (without the heading line); empty string clears it", false);
     schema_str(s, "expected_updated_at", "Concurrency guard (optional, default: none = last write wins): the updated_at you got from get_note or the last update. If the note changed since, nothing is written and the error names the current updated_at - re-read, re-apply, retry", false);
     schema_str(s, "kind",  "New kind: note, adr, or hub (optional)", false);
@@ -1165,7 +1248,7 @@ void docs_register_tools(McpRegistry *r) {
     schema_num(s, "limit",      "Max notes to return (optional, default 100)", false);
     schema_num(s, "offset",     "Notes to skip for pagination (optional, default 0)", false);
     schema_bool(s, "include_archived", "Include archived notes (default false)", false);
-    schema_str(s, "slug_prefix", "Only notes whose slug starts with this prefix, case-insensitive (optional) - cheap way to check number ranges such as \"adr-studio-02\"", false);
+    schema_str(s, "slug_prefix", "Only notes whose slug starts with this prefix, case-insensitive (optional) - cheap way to check number ranges such as \"adr-foo-02\"", false);
     schema_num(s, "unverified_since_days",
         "Only notes whose last verification is older than N days or missing — "
         "use for staleness reviews (optional)", false);
@@ -1176,7 +1259,7 @@ void docs_register_tools(McpRegistry *r) {
         s, tool_docs_list_notes);
 
     s = schema_new();
-    schema_str(s, "query",      "Free-text search (words, phrases in quotes, -exclusions). Matches title, tags, body and slug (substring; slug hits come first).", true);
+    schema_str(s, "query",      "Free-text search (words, phrases in quotes, -exclusions). Matches title, tags, body and slug (substring; slug hits come first, at most half of limit).", true);
     schema_num(s, "project_id", "Restrict to one project (optional — omit for a global search)", false);
     schema_str(s, "kind",       "Filter by kind: note, adr, or hub (optional)", false);
     schema_str(s, "tag",        "Filter by tag (optional)", false);
