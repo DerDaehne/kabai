@@ -7,16 +7,18 @@
 #include "kanban/tickets.h"
 #include "kanban/comments.h"
 #include "kanban/board_statuses.h"
+#include "db/transaction.h"
 
 /* ============================================================================
  * Error mapping
  * ============================================================================ */
 
 /* Map the captured SQLSTATE/constraint of the last failed service call to
- * an actionable tool error (Kanban AI #345); mirrors docs_db_error in the
- * docs module. Falls back to the generic text when nothing was captured. */
-static cJSON *kanban_db_error(McpContext *ctx, cJSON *id, const char *fallback) {
-    DatabaseConnection *db = ctx->db;
+ * an actionable message (Kanban AI #345); mirrors docs_db_error in the
+ * docs module. Falls back to the generic text when nothing was captured.
+ * Returns a literal, db->last_primary or buf. */
+static const char *kanban_db_msg(DatabaseConnection *db, char *buf, size_t size,
+                                 const char *fallback) {
     const char *st = db->last_sqlstate;
     const char *cn = db->last_constraint;
 
@@ -24,41 +26,57 @@ static cJSON *kanban_db_error(McpContext *ctx, cJSON *id, const char *fallback) 
         if (strcmp(cn, "check_ticket_status_project") == 0 ||
             strcmp(cn, "check_same_project_from") == 0 ||
             strcmp(cn, "check_same_project_to") == 0)
-            return mcp_tool_err(id,
-                "status_id does not belong to the given project_id: board columns are "
-                "per project — look them up via kabai_list_board_statuses(project_id)");
+            return "status_id does not belong to the given project_id: board columns are "
+                   "per project — look them up via kabai_list_board_statuses(project_id)";
         if (strstr(cn, "project_id"))
-            return mcp_tool_err(id,
-                "project_id does not exist: check kabai_list_projects");
+            return "project_id does not exist: check kabai_list_projects";
         if (strstr(cn, "status_id"))
-            return mcp_tool_err(id,
-                "status_id does not exist: check kabai_list_board_statuses(project_id)");
+            return "status_id does not exist: check kabai_list_board_statuses(project_id)";
         if (strstr(cn, "ticket"))
-            return mcp_tool_err(id,
-                "ticket_id does not exist: check the ID (the ticket may have been deleted)");
-        return mcp_tool_err(id, "Referenced row does not exist (foreign key violation)");
+            return "ticket_id does not exist: check the ID (the ticket may have been deleted)";
+        return "Referenced row does not exist (foreign key violation)";
     }
     if (strcmp(st, "23505") == 0) {  /* unique_violation */
         if (strstr(cn, "slug"))
-            return mcp_tool_err(id, "Slug already exists: project slugs are unique");
+            return "Slug already exists: project slugs are unique";
         if (strstr(cn, "board_statuses"))
-            return mcp_tool_err(id, "A column with this name already exists in this project");
-        return mcp_tool_err(id, "Already exists (duplicate)");
+            return "A column with this name already exists in this project";
+        return "Already exists (duplicate)";
     }
     if (strcmp(st, "23514") == 0) {  /* check_violation */
         if (strstr(cn, "self"))
-            return mcp_tool_err(id, "A ticket cannot relate to or block itself");
-        return mcp_tool_err(id, db->last_primary[0] ? db->last_primary
-                                                    : "Constraint violation");
+            return "A ticket cannot relate to or block itself";
+        return db->last_primary[0] ? db->last_primary : "Constraint violation";
     }
     if (strcmp(st, "P0001") == 0 && db->last_primary[0])  /* trigger RAISE */
-        return mcp_tool_err(id, db->last_primary);
+        return db->last_primary;
     if (db->last_primary[0]) {
-        char buf[600];
-        snprintf(buf, sizeof(buf), "%s: %s", fallback, db->last_primary);
-        return mcp_tool_err(id, buf);
+        snprintf(buf, size, "%s: %s", fallback, db->last_primary);
+        return buf;
     }
-    return mcp_tool_err(id, fallback);
+    return fallback;
+}
+
+static cJSON *kanban_db_error(McpContext *ctx, cJSON *id, const char *fallback) {
+    char buf[600];
+    return mcp_tool_err(id, kanban_db_msg(ctx->db, buf, sizeof(buf), fallback));
+}
+
+/* Roll back the open transaction and fail with the captured DB error,
+ * prefixed with label (e.g. "blocks[1]=999") when given so the caller can
+ * see which value was bad. The captured error survives the ROLLBACK. */
+static cJSON *tx_db_fail(McpContext *ctx, cJSON *id, const char *label, const char *fallback) {
+    char msg[600], out[700];
+    snprintf(msg, sizeof(msg), "%s", kanban_db_msg(ctx->db, out, sizeof(out), fallback));
+    db_rollback_transaction(ctx->db);
+    if (!label) return mcp_tool_err(id, msg);
+    snprintf(out, sizeof(out), "%s: %s", label, msg);
+    return mcp_tool_err(id, out);
+}
+
+static cJSON *tx_fail(McpContext *ctx, cJSON *id, const char *msg) {
+    db_rollback_transaction(ctx->db);
+    return mcp_tool_err(id, msg);
 }
 
 
@@ -128,6 +146,201 @@ static cJSON *tool_get_project(McpContext *ctx, cJSON *id, cJSON *params) {
  * Tickets
  * ============================================================================ */
 
+/* ---- Bulk planning (#798): ticket + tasks + relations in one transaction ---- */
+
+#define MAX_BATCH_ITEMS 50
+#define REF_MAX 64
+
+/* Batch-local names ("t1") of the items being created, with their ids. */
+typedef struct {
+    int         n;
+    const char *ref[MAX_BATCH_ITEMS];
+    int         item[MAX_BATCH_ITEMS];  /* index of the item that owns the ref */
+    int         id[MAX_BATCH_ITEMS];    /* filled once the ids are reserved */
+} RefTable;
+
+static bool valid_relation_type(const char *rel) {
+    return strcmp(rel, "parent_of")    == 0 || strcmp(rel, "blocks")     == 0 ||
+           strcmp(rel, "duplicate_of") == 0 || strcmp(rel, "relates_to") == 0;
+}
+
+static bool ref_char(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+/* Insert one ticket row. preset_id 0 takes the sequence default. */
+static bool insert_ticket(McpContext *ctx, int preset_id, int project_id, int status_id,
+                          const char *title, const char *description, const char *type,
+                          bool docs_required, int *out_id) {
+    DatabaseConnection *db = ctx->db;
+    char pre[32], proj[32], stat[32];
+    snprintf(pre, sizeof(pre), "%d", preset_id);
+    snprintf(proj, sizeof(proj), "%d", project_id);
+    snprintf(stat, sizeof(stat), "%d", status_id);
+    const char *p[6] = {preset_id ? pre : NULL, proj, stat, title, description,
+                        (type && type[0]) ? type : "ticket"};
+    db_clear_error(db);
+    PGresult *res = PQexecParams(db->conn,
+        "INSERT INTO tickets (id, project_id, status_id, title, description, type)"
+        " VALUES (COALESCE($1::int, nextval(pg_get_serial_sequence('tickets','id'))),"
+        " $2, $3, $4, $5, $6) RETURNING id",
+        6, NULL, p, NULL, NULL, 0);
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        db_capture_error(db, res);
+        if (res) PQclear(res);
+        return false;
+    }
+    *out_id = atoi(PQgetvalue(res, 0, 0));
+    PQclear(res);
+    if (!docs_required) return true;
+
+    char tid[32];
+    snprintf(tid, sizeof(tid), "%d", *out_id);
+    const char *up[1] = {tid};
+    res = PQexecParams(db->conn, "UPDATE tickets SET docs_required = TRUE WHERE id = $1",
+                       1, NULL, up, NULL, NULL, 0);
+    bool ok = res && PQresultStatus(res) == PGRES_COMMAND_OK;
+    if (!ok) db_capture_error(db, res);
+    if (res) PQclear(res);
+    return ok;
+}
+
+/* Id of the batch ref that starts at s[1..len), or 0. */
+static int ref_lookup(const RefTable *refs, const char *name, size_t len) {
+    for (int i = 0; refs && i < refs->n; i++)
+        if (strlen(refs->ref[i]) == len && strncmp(refs->ref[i], name, len) == 0)
+            return refs->id[i];
+    return 0;
+}
+
+/* Copy of s with every "$ref" naming a batch item replaced by "#<id>";
+ * other "$..." text stays as written. Caller frees. NULL for NULL/OOM. */
+static char *expand_refs(const char *s, const RefTable *refs) {
+    if (!s) return NULL;
+    char *out = NULL;
+    for (int pass = 0; pass < 2; pass++) {
+        size_t n = 0;
+        for (const char *c = s; *c; ) {
+            size_t k = 0;
+            int rid = 0;
+            if (*c == '$') {
+                while (ref_char(c[1 + k])) k++;
+                rid = k ? ref_lookup(refs, c + 1, k) : 0;
+            }
+            if (rid) {
+                char num[40];
+                int w = snprintf(num, sizeof(num), "#%d", rid);
+                if (pass) memcpy(out + n, num, (size_t)w);
+                n += (size_t)w;
+                c += 1 + k;
+            } else {
+                if (pass) out[n] = *c;
+                n++;
+                c++;
+            }
+        }
+        if (pass) { out[n] = '\0'; return out; }
+        out = malloc(n + 1);
+        if (!out) return NULL;
+    }
+    return NULL;
+}
+
+/* Ticket id from a number or, with refs, a "$ref" string. 0 and a reason in
+ * err when the value is neither. */
+static int resolve_target(const cJSON *v, const RefTable *refs, char *err, size_t size) {
+    if (cJSON_IsNumber(v) && v->valueint > 0 && v->valuedouble == (double)v->valueint)
+        return v->valueint;
+    if (cJSON_IsString(v) && refs && v->valuestring[0] == '$') {
+        int rid = ref_lookup(refs, v->valuestring + 1, strlen(v->valuestring + 1));
+        if (!rid) snprintf(err, size, "unknown ref %s (no item in this batch has that ref)",
+                           v->valuestring);
+        return rid;
+    }
+    char *txt = cJSON_PrintUnformatted(v);
+    snprintf(err, size, "invalid value %s: expected a ticket id%s", txt ? txt : "?",
+             refs ? " or a \"$ref\" of this batch" : "");
+    if (txt) cJSON_free(txt);
+    return 0;
+}
+
+/* Fail inside the transaction naming the offending value: "<where><what>: <why>". */
+static cJSON *extras_fail(McpContext *ctx, cJSON *id, const char *where, const char *what,
+                          const char *why) {
+    char buf[700];
+    snprintf(buf, sizeof(buf), "%s%s: %s", where, what, why);
+    return tx_fail(ctx, id, buf);
+}
+
+/* Link ticket new_id with every entry of spec[field] (ids or "$refs").
+ * incoming: entry -> new_id (blocked_by), else new_id -> entry (blocks). */
+static cJSON *link_list(McpContext *ctx, cJSON *id, int new_id, cJSON *spec, const char *field,
+                        const RefTable *refs, const char *where) {
+    cJSON *list = cJSON_GetObjectItemCaseSensitive(spec, field);
+    if (!list) return NULL;
+    if (!cJSON_IsArray(list))
+        return extras_fail(ctx, id, where, field, "must be an array of ticket ids");
+    bool incoming = strcmp(field, "blocked_by") == 0;
+    int i = 0;
+    cJSON *e;
+    cJSON_ArrayForEach(e, list) {
+        char what[80], err[300];
+        snprintf(what, sizeof(what), "%s[%d]", field, i++);
+        int other = resolve_target(e, refs, err, sizeof(err));
+        if (!other) return extras_fail(ctx, id, where, what, err);
+        if (!(incoming ? ticket_link(ctx->db, other, new_id, "blocks")
+                       : ticket_link(ctx->db, new_id, other, "blocks"))) {
+            char label[200];
+            snprintf(label, sizeof(label), "%s%s=%d", where, what, other);
+            return tx_db_fail(ctx, id, label, "Failed to create relation");
+        }
+    }
+    return NULL;
+}
+
+/* Tasks and relations of the freshly inserted ticket new_id, from the
+ * create_ticket fields in spec. NULL on success, else an error response
+ * with the transaction already rolled back. */
+static cJSON *apply_extras(McpContext *ctx, cJSON *id, int new_id, cJSON *spec,
+                           const RefTable *refs, const char *where) {
+    cJSON *tasks = cJSON_GetObjectItemCaseSensitive(spec, "tasks");
+    if (tasks) {
+        if (!cJSON_IsArray(tasks))
+            return extras_fail(ctx, id, where, "tasks", "must be an array of strings");
+        int i = 0;
+        cJSON *t;
+        cJSON_ArrayForEach(t, tasks) {
+            char what[80];
+            snprintf(what, sizeof(what), "tasks[%d]", i++);
+            if (!cJSON_IsString(t) || !t->valuestring[0])
+                return extras_fail(ctx, id, where, what, "must be a non-empty string");
+            TicketTask *tk = ticket_add_task(ctx->db, new_id, t->valuestring);
+            if (!tk) {
+                char label[200];
+                snprintf(label, sizeof(label), "%s%s", where, what);
+                return tx_db_fail(ctx, id, label, "Failed to add task");
+            }
+            ticket_task_free(tk);
+        }
+    }
+
+    cJSON *parent = cJSON_GetObjectItemCaseSensitive(spec, "parent_id");
+    if (!parent) parent = cJSON_GetObjectItemCaseSensitive(spec, "parent");
+    if (parent) {
+        char err[300];
+        int p = resolve_target(parent, refs, err, sizeof(err));
+        if (!p) return extras_fail(ctx, id, where, "parent_id", err);
+        if (!ticket_link(ctx->db, p, new_id, "parent_of")) {
+            char label[200];
+            snprintf(label, sizeof(label), "%sparent_id=%d", where, p);
+            return tx_db_fail(ctx, id, label, "Failed to create relation");
+        }
+    }
+
+    cJSON *err = link_list(ctx, id, new_id, spec, "blocks", refs, where);
+    return err ? err : link_list(ctx, id, new_id, spec, "blocked_by", refs, where);
+}
+
 static cJSON *tool_create_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     int project_id, status_id;
     const char *title = param_str(params, "title");
@@ -143,32 +356,148 @@ static cJSON *tool_create_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     if (type_val && strcmp(type_val, "ticket") != 0 && strcmp(type_val, "epic") != 0)
         return mcp_tool_err(id, "Invalid type: must be 'ticket' or 'epic'");
 
-    Ticket *t = ticket_create(ctx->db, project_id, status_id, title,
-                              param_str(params, "description"), type_val);
-    if (!t) return kanban_db_error(ctx, id, "Failed to create ticket");
-
+    const char *description = param_str(params, "description");
     bool docs_required = param_bool(params, "docs_required", false);
-    if (docs_required) {
-        char tid_str[32];
-        snprintf(tid_str, sizeof(tid_str), "%d", t->id);
-        const char *dp[1] = {tid_str};
-        PGresult *dres = PQexecParams(ctx->db->conn,
-            "UPDATE tickets SET docs_required = TRUE WHERE id = $1",
-            1, NULL, dp, NULL, NULL, 0);
-        if (dres) PQclear(dres);
-    }
+    int new_id;
+    if (!db_begin_transaction(ctx->db))
+        return mcp_tool_err(id, "Failed to start transaction");
+    if (!insert_ticket(ctx, 0, project_id, status_id, title, description, type_val,
+                       docs_required, &new_id))
+        return tx_db_fail(ctx, id, NULL, "Failed to create ticket");
+    cJSON *err = apply_extras(ctx, id, new_id, params, NULL, "");
+    if (err) return err;
+    if (!db_commit_transaction(ctx->db))
+        return tx_fail(ctx, id, "Failed to commit transaction");
 
     cJSON *r = cJSON_CreateObject();
-    cJSON_AddNumberToObject(r, "id", t->id);
-    cJSON_AddNumberToObject(r, "project_id", t->project_id);
-    cJSON_AddNumberToObject(r, "status_id", t->status_id);
-    cJSON_AddStringToObject(r, "type", t->type ? t->type : "ticket");
-    cJSON_AddStringToObject(r, "title", t->title);
-    if (t->description) cJSON_AddStringToObject(r, "description", t->description);
-    if (t->assignee)    cJSON_AddStringToObject(r, "assignee", t->assignee);
-    if (docs_required)  cJSON_AddBoolToObject(r, "docs_required", 1);
-    ticket_free(t);
+    cJSON_AddNumberToObject(r, "id", new_id);
+    cJSON_AddNumberToObject(r, "project_id", project_id);
+    cJSON_AddNumberToObject(r, "status_id", status_id);
+    cJSON_AddStringToObject(r, "title", title);
+    if (param_bool(params, "verbose", false)) {
+        cJSON_AddStringToObject(r, "type", type_val ? type_val : "ticket");
+        if (description) cJSON_AddStringToObject(r, "description", description);
+        if (docs_required) cJSON_AddBoolToObject(r, "docs_required", 1);
+    }
     return mcp_tool_ok(id, r);
+}
+
+static void item_where(char *buf, size_t size, int index, const char *ref) {
+    if (ref) snprintf(buf, size, "items[%d] (ref %s): ", index, ref);
+    else     snprintf(buf, size, "items[%d]: ", index);
+}
+
+static cJSON *tool_create_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
+    int project_id, default_status = 0;
+    cJSON *items = cJSON_GetObjectItemCaseSensitive(params, "items");
+    bool ok[2] = {param_num(params, "project_id", &project_id), cJSON_IsArray(items)};
+    if (!ok[0] || !ok[1]) {
+        const char *names[2] = {"project_id", "items (array)"};
+        char buf[120];
+        return mcp_tool_err(id, missing_params_msg(buf, sizeof(buf), names, ok, 2));
+    }
+    param_num_alias(params, "status_id", "new_status_id", &default_status);
+
+    int n = cJSON_GetArraySize(items);
+    if (n == 0) return mcp_tool_err(id, "items is empty: nothing to create");
+    if (n > MAX_BATCH_ITEMS) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "Too many items: %d (max %d per call). Nothing was "
+                 "created - split the batch (refs only resolve within one call)",
+                 n, MAX_BATCH_ITEMS);
+        return mcp_tool_err(id, buf);
+    }
+
+    /* Validate every item and collect the refs before touching the database. */
+    RefTable refs = {0};
+    int status[MAX_BATCH_ITEMS];
+    const char *item_ref[MAX_BATCH_ITEMS];
+    for (int i = 0; i < n; i++) {
+        cJSON *it = cJSON_GetArrayItem(items, i);
+        char where[120], buf[400];
+        cJSON *rj = cJSON_IsObject(it) ? cJSON_GetObjectItemCaseSensitive(it, "ref") : NULL;
+        item_ref[i] = cJSON_IsString(rj) ? rj->valuestring : NULL;
+        item_where(where, sizeof(where), i, item_ref[i]);
+        const char *msg = NULL;
+        const char *type_val = cJSON_IsObject(it) ? param_str(it, "type") : NULL;
+        if (!cJSON_IsObject(it)) msg = "must be an object";
+        else if (!param_str(it, "title")) msg = "missing title";
+        else if (!param_num_alias(it, "status_id", "new_status_id", &status[i]) &&
+                 !(status[i] = default_status))
+            msg = "missing status_id (set it per item or once on the call)";
+        else if (type_val && strcmp(type_val, "ticket") != 0 && strcmp(type_val, "epic") != 0)
+            msg = "invalid type: must be 'ticket' or 'epic'";
+        else if (rj && !item_ref[i]) msg = "ref must be a string";
+        else if (item_ref[i]) {
+            size_t len = strlen(item_ref[i]);
+            bool chars = len > 0 && len < REF_MAX;
+            for (size_t k = 0; chars && k < len; k++) chars = ref_char(item_ref[i][k]);
+            if (!chars) msg = "invalid ref: use 1-63 letters, digits or underscores (no '$')";
+            else if (ref_lookup(&refs, item_ref[i], len)) msg = "duplicate ref";
+            else {
+                refs.ref[refs.n] = item_ref[i];
+                refs.item[refs.n] = i;
+                refs.id[refs.n++] = -1;  /* placeholder: marks the ref as taken */
+            }
+        }
+        if (msg) {
+            snprintf(buf, sizeof(buf), "%s%s. Nothing was created.", where, msg);
+            return mcp_tool_err(id, buf);
+        }
+    }
+
+    if (!db_begin_transaction(ctx->db)) return mcp_tool_err(id, "Failed to start transaction");
+
+    /* Reserve all ids first so refs, also to later items, resolve everywhere. */
+    int item_id[MAX_BATCH_ITEMS];
+    char count[16];
+    snprintf(count, sizeof(count), "%d", n);
+    const char *cp[1] = {count};
+    db_clear_error(ctx->db);
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "SELECT nextval(pg_get_serial_sequence('tickets','id')) FROM generate_series(1, $1::int)",
+        1, NULL, cp, NULL, NULL, 0);
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) != n) {
+        db_capture_error(ctx->db, res);
+        if (res) PQclear(res);
+        return tx_db_fail(ctx, id, NULL, "Failed to reserve ticket ids");
+    }
+    for (int i = 0; i < n; i++) item_id[i] = atoi(PQgetvalue(res, i, 0));
+    PQclear(res);
+    for (int k = 0; k < refs.n; k++) refs.id[k] = item_id[refs.item[k]];
+
+    for (int i = 0; i < n; i++) {
+        cJSON *it = cJSON_GetArrayItem(items, i);
+        char where[120];
+        item_where(where, sizeof(where), i, item_ref[i]);
+        char *title = expand_refs(param_str(it, "title"), &refs);
+        char *desc = expand_refs(param_str(it, "description"), &refs);
+        int got;
+        bool done = title && insert_ticket(ctx, item_id[i], project_id, status[i], title, desc,
+                                           param_str(it, "type"),
+                                           param_bool(it, "docs_required", false), &got);
+        free(title);
+        free(desc);
+        if (!done) return tx_db_fail(ctx, id, where, "Failed to create ticket");
+    }
+    for (int i = 0; i < n; i++) {
+        char where[120];
+        item_where(where, sizeof(where), i, item_ref[i]);
+        cJSON *err = apply_extras(ctx, id, item_id[i], cJSON_GetArrayItem(items, i), &refs, where);
+        if (err) return err;
+    }
+    if (!db_commit_transaction(ctx->db))
+        return tx_fail(ctx, id, "Failed to commit transaction");
+
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        if (item_ref[i]) cJSON_AddStringToObject(o, "ref", item_ref[i]);
+        cJSON_AddNumberToObject(o, "id", item_id[i]);
+        cJSON_AddNumberToObject(o, "status_id", status[i]);
+        cJSON_AddItemToArray(arr, o);
+    }
+    return mcp_tool_ok(id, arr);
 }
 
 static cJSON *tool_list_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
@@ -837,17 +1166,16 @@ static cJSON *tool_delete_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
 /* Shared argument parsing of link/unlink (#970, #830). relation_type is
  * canonical, link_type its alias (same name as kabai_docs_link_notes).
  * blocked_by is the natural reading of blocks: "from is blocked by to" is
- * stored as "to blocks from". Returns an error response or NULL. */
-static cJSON *read_relation_args(cJSON *id, cJSON *params, int *from_id, int *to_id,
-                                 const char **rel) {
+ * stored as "to blocks from". Returns NULL, or the error text (in buf). */
+static const char *relation_args_msg(cJSON *params, int *from_id, int *to_id,
+                                     const char **rel, char *buf, size_t size) {
     *rel = param_str_alias(params, "relation_type", "link_type");
     bool ok[3] = {param_num(params, "from_ticket_id", from_id),
                   param_num(params, "to_ticket_id", to_id), *rel != NULL};
     if (!ok[0] || !ok[1] || !ok[2]) {
         const char *names[3] = {"from_ticket_id", "to_ticket_id",
                                 "relation_type (alias: link_type)"};
-        char buf[200];
-        return mcp_tool_err(id, missing_params_msg(buf, sizeof(buf), names, ok, 3));
+        return missing_params_msg(buf, size, names, ok, 3);
     }
     if (strcmp(*rel, "blocked_by") == 0) {
         int tmp = *from_id; *from_id = *to_id; *to_id = tmp;
@@ -856,18 +1184,59 @@ static cJSON *read_relation_args(cJSON *id, cJSON *params, int *from_id, int *to
     return NULL;
 }
 
+static cJSON *read_relation_args(cJSON *id, cJSON *params, int *from_id, int *to_id,
+                                 const char **rel) {
+    char buf[200];
+    const char *msg = relation_args_msg(params, from_id, to_id, rel, buf, sizeof(buf));
+    return msg ? mcp_tool_err(id, msg) : NULL;
+}
+
+static const char *INVALID_RELATION_MSG =
+    "Invalid relation_type: must be parent_of, blocks, blocked_by, duplicate_of, or relates_to";
+
+/* links: [{from_ticket_id, to_ticket_id, relation_type}] in one transaction. */
+static cJSON *link_tickets_batch(McpContext *ctx, cJSON *id, cJSON *links) {
+    int n = cJSON_GetArraySize(links);
+    if (!cJSON_IsArray(links) || n == 0)
+        return mcp_tool_err(id, "links must be a non-empty array of "
+                                "{from_ticket_id, to_ticket_id, relation_type}");
+    if (!db_begin_transaction(ctx->db)) return mcp_tool_err(id, "Failed to start transaction");
+    for (int i = 0; i < n; i++) {
+        cJSON *l = cJSON_GetArrayItem(links, i);
+        int from_id, to_id;
+        const char *rel;
+        char buf[200], msg[300];
+        const char *bad = cJSON_IsObject(l)
+            ? relation_args_msg(l, &from_id, &to_id, &rel, buf, sizeof(buf))
+            : "must be an object";
+        if (!bad && !valid_relation_type(rel)) bad = INVALID_RELATION_MSG;
+        if (bad) {
+            snprintf(msg, sizeof(msg), "links[%d]: %s. Nothing was linked.", i, bad);
+            return tx_fail(ctx, id, msg);
+        }
+        if (!ticket_link(ctx->db, from_id, to_id, rel)) {
+            snprintf(msg, sizeof(msg), "links[%d] (%d -> %d %s)", i, from_id, to_id, rel);
+            return tx_db_fail(ctx, id, msg, "Failed to create relation");
+        }
+    }
+    if (!db_commit_transaction(ctx->db)) return tx_fail(ctx, id, "Failed to commit transaction");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "success", 1);
+    cJSON_AddNumberToObject(r, "linked", n);
+    return mcp_tool_ok(id, r);
+}
+
 static cJSON *tool_link_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
+    cJSON *links = cJSON_GetObjectItemCaseSensitive(params, "links");
+    if (links) return link_tickets_batch(ctx, id, links);
+
     int from_id, to_id;
     const char *rel;
     cJSON *err = read_relation_args(id, params, &from_id, &to_id, &rel);
     if (err) return err;
 
-    if (strcmp(rel, "parent_of")    != 0 &&
-        strcmp(rel, "blocks")       != 0 &&
-        strcmp(rel, "duplicate_of") != 0 &&
-        strcmp(rel, "relates_to")   != 0)
-        return mcp_tool_err(id,
-            "Invalid relation_type: must be parent_of, blocks, blocked_by, duplicate_of, or relates_to");
+    if (!valid_relation_type(rel))
+        return mcp_tool_err(id, INVALID_RELATION_MSG);
 
     if (!ticket_link(ctx->db, from_id, to_id, rel))
         return kanban_db_error(ctx, id,
@@ -905,11 +1274,54 @@ static cJSON *tool_unlink_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
  * Tasks
  * ============================================================================ */
 
+/* titles: [string] (plus an optional single title) in one transaction. */
+static cJSON *add_tasks_batch(McpContext *ctx, cJSON *id, int ticket_id, const char *title,
+                              cJSON *titles) {
+    if (!cJSON_IsArray(titles) || cJSON_GetArraySize(titles) == 0)
+        return mcp_tool_err(id, "titles must be a non-empty array of strings");
+    if (!db_begin_transaction(ctx->db)) return mcp_tool_err(id, "Failed to start transaction");
+    cJSON *out = cJSON_CreateArray();
+    int i = title ? -1 : 0;  /* -1: the single title goes first */
+    cJSON *t = titles->child;
+    while (i < cJSON_GetArraySize(titles)) {
+        const char *text = i < 0 ? title : (cJSON_IsString(t) ? t->valuestring : NULL);
+        char label[40];
+        snprintf(label, sizeof(label), i < 0 ? "title" : "titles[%d]", i);
+        if (!text || !text[0]) {
+            cJSON_Delete(out);
+            return extras_fail(ctx, id, "", label, "must be a non-empty string; nothing was added");
+        }
+        TicketTask *task = ticket_add_task(ctx->db, ticket_id, text);
+        if (!task) {
+            cJSON_Delete(out);
+            return tx_db_fail(ctx, id, label, "Failed to add task");
+        }
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "id", task->id);
+        cJSON_AddStringToObject(o, "title", task->title);
+        cJSON_AddItemToArray(out, o);
+        ticket_task_free(task);
+        if (i >= 0) t = t->next;
+        i++;
+    }
+    if (!db_commit_transaction(ctx->db)) {
+        cJSON_Delete(out);
+        return tx_fail(ctx, id, "Failed to commit transaction");
+    }
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddNumberToObject(r, "ticket_id", ticket_id);
+    cJSON_AddItemToObject(r, "tasks", out);
+    return mcp_tool_ok(id, r);
+}
+
 static cJSON *tool_add_task(McpContext *ctx, cJSON *id, cJSON *params) {
     int ticket_id;
     const char *title = param_str(params, "title");
-    if (!param_num(params, "ticket_id", &ticket_id) || !title)
-        return mcp_tool_err(id, "Missing required parameters: ticket_id, title");
+    cJSON *titles = cJSON_GetObjectItemCaseSensitive(params, "titles");
+    if (!param_num(params, "ticket_id", &ticket_id) || (!title && !titles))
+        return mcp_tool_err(id, titles ? "Missing required parameter: ticket_id"
+                                       : "Missing required parameters: ticket_id, title");
+    if (titles) return add_tasks_batch(ctx, id, ticket_id, title, titles);
 
     TicketTask *task = ticket_add_task(ctx->db, ticket_id, title);
     if (!task) return kanban_db_error(ctx, id, "Failed to add task");
@@ -1474,10 +1886,37 @@ void kanban_register_tools(McpRegistry *r) {
     schema_bool(s, "docs_required",
         "If true, the ticket cannot move to done without a linked knowledge-base note "
         "(kabai_docs_link_ticket). Set it on architecturally relevant work.", false);
+    schema_str_array(s, "tasks",
+        "Acceptance-criterion tasks to create with the ticket (optional; same transaction)", false);
+    schema_num(s, "parent_id", "Epic/parent ticket ID: creates parent_of(parent_id -> new ticket) (optional)", false);
+    schema_num_array(s, "blocks", "Ticket IDs that wait for this ticket (this blocks them) (optional)", false);
+    schema_num_array(s, "blocked_by", "Ticket IDs this ticket waits for (they block this ticket) (optional)", false);
+    schema_bool(s, "verbose", "Echo type, description and docs_required back (default false: slim response)", false);
     mcp_registry_add(r, "kabai_create_ticket",
         "Create a new ticket or epic in a project. "
-        "Use type='epic' for high-level goals that group child tickets via link_tickets(parent_of).",
+        "Use type='epic' for high-level goals that group child tickets. "
+        "tasks, parent_id, blocks and blocked_by are created in the same transaction: if any "
+        "value is invalid nothing is created and the error names the value. "
+        "Changed: the response is slim - {id, project_id, status_id, title} - and no longer echoes "
+        "the description; pass verbose=true for the full echo. "
+        "For many tickets at once use kabai_create_tickets.",
         s, tool_create_ticket);
+
+    s = schema_new();
+    schema_num(s, "project_id", "Project ID for all items", true);
+    schema_num(s, "status_id", "Default board column for items without their own status_id (optional; alias: new_status_id)", false);
+    schema_obj_array(s, "items",
+        "1-50 items, created atomically. Each item takes the kabai_create_ticket fields (title, "
+        "description, type, status_id, docs_required, tasks, blocks, blocked_by) plus ref (a batch-local "
+        "name such as \"t1\": letters, digits, underscore) and parent (alias parent_id). parent, blocks "
+        "and blocked_by take ticket IDs or \"$t1\" references to earlier OR later items of the same call. "
+        "\"$t1\" inside title/description becomes \"#<id>\".", true);
+    mcp_registry_add(r, "kabai_create_tickets",
+        "Create up to 50 tickets (with tasks and relations) in one atomic call. Local references "
+        "(ref / \"$ref\") let items link each other and mention each other's #id before the ids exist. "
+        "Any invalid item, unknown or duplicate ref, or failed relation creates nothing; the error names "
+        "the item index and ref. Returns [{ref, id, status_id}] in item order. Archived projects are refused.",
+        s, tool_create_tickets);
 
     s = schema_new();
     schema_num(s, "project_id", "ID of the project to list tickets from", true);
@@ -1619,6 +2058,10 @@ void kanban_register_tools(McpRegistry *r) {
         "blocked_by (the reverse reading: from waits for to; stored as to blocks from), "
         "duplicate_of (from is duplicate of to), relates_to (generic)", false);
     schema_str(s, "link_type", "Alias of relation_type, same name as kabai_docs_link_notes (optional)", false);
+    schema_obj_array(s, "links",
+        "Batch form (optional): [{from_ticket_id, to_ticket_id, relation_type}] created in one transaction; "
+        "aliases and blocked_by work as in the single form. If given, the single-form parameters are ignored. "
+        "One invalid link creates none and the error names it", false);
     mcp_registry_add(r, "kabai_link_tickets",
         "Create a directed relation between two tickets. blocks means: from_ticket must be done "
         "before to_ticket can start (to waits for from); blocked_by is the same edge read the other way. "
@@ -1639,7 +2082,8 @@ void kanban_register_tools(McpRegistry *r) {
 
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
-    schema_str(s, "title",     "Task / acceptance criterion description", true);
+    schema_str(s, "title",     "Task / acceptance criterion description (required unless titles is given)", false);
+    schema_str_array(s, "titles", "Batch form (optional): several task descriptions added in one transaction", false);
     mcp_registry_add(r, "kabai_add_task",
         "Add an acceptance criterion task to a ticket. "
         "All tasks must be completed before the ticket can be moved to 'done'.",

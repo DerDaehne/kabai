@@ -130,12 +130,12 @@ kabai/
 ### Tickets
 | Tool | Purpose |
 |------|---------|
-| `kabai_create_ticket` / `kabai_update_ticket` / `kabai_delete_ticket` | lifecycle; `docs_required` gates closing on a linked note |
+| `kabai_create_ticket` / `kabai_create_tickets` / `kabai_update_ticket` / `kabai_delete_ticket` | lifecycle; `docs_required` gates closing on a linked note; create takes `tasks`, `parent_id`, `blocks`, `blocked_by` in one transaction and answers slim (`verbose` for the echo); `create_tickets` is the atomic batch of up to 50 with local `ref`/`$ref` references |
 | `kabai_list_tickets` / `kabai_search_tickets` / `kabai_get_ticket` / `kabai_get_ticket_detailed` | reading; search is full-text ranked with snippets (lean rows, `full` for descriptions, global without `project_id`); list filters by status/type/assignee and `workable` (pickup-ready); detailed includes tasks, work log (`comments_limit`), relations, linked notes |
 | `kabai_move_ticket` / `kabai_move_tickets` | workflow moves (graph + guards enforced) |
 | `kabai_assign_ticket` | assignee + model from env |
 | `kabai_link_tickets` / `kabai_unlink_tickets` | parent_of, blocks (from done before to starts; `blocked_by` as reverse reading), duplicate_of, relates_to; `link_type` is an alias of `relation_type` |
-| `kabai_add_task` / `kabai_complete_task` / `kabai_complete_tasks` | acceptance criteria (open tasks block done) |
+| `kabai_add_task` / `kabai_complete_task` / `kabai_complete_tasks` | acceptance criteria (open tasks block done); `add_task` takes `titles[]`, `link_tickets` takes `links[]` as atomic batches |
 | `kabai_add_comment` / `kabai_list_comments` | work log |
 | `kabai_add_attachment` / `kabai_delete_attachment` / `kabai_get_attachment` | image attachments (PNG/JPEG/WebP/GIF, ≤ 10 MiB, type detected from bytes); upload by `file_path` or `data_base64`, `description` (alt-text) required; delete unlinks per ticket and removes unreferenced images |
 

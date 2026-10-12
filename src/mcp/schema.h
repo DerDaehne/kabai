@@ -21,6 +21,9 @@ void schema_num (cJSON *s, const char *name, const char *desc, bool required);
 void schema_str (cJSON *s, const char *name, const char *desc, bool required);
 void schema_bool(cJSON *s, const char *name, const char *desc, bool required);
 void schema_num_array(cJSON *s, const char *name, const char *desc, bool required);
+void schema_str_array(cJSON *s, const char *name, const char *desc, bool required);
+/* Array of objects; describe the fields in desc. */
+void schema_obj_array(cJSON *s, const char *name, const char *desc, bool required);
 
 /* false / NULL when the parameter is absent or has the wrong type. */
 bool        param_num (cJSON *params, const char *name, int *out);

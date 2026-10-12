@@ -99,3 +99,25 @@ const char *missing_params_msg(char *buf, size_t size, const char *const *names,
     }
     return buf;
 }
+
+static void schema_array_of(cJSON *s, const char *name, const char *item_type,
+                            const char *desc, bool required) {
+    cJSON *p = cJSON_CreateObject();
+    cJSON_AddStringToObject(p, "type", "array");
+    cJSON *items = cJSON_CreateObject();
+    cJSON_AddStringToObject(items, "type", item_type);
+    cJSON_AddItemToObject(p, "items", items);
+    cJSON_AddStringToObject(p, "description", desc);
+    cJSON_AddItemToObject(cJSON_GetObjectItemCaseSensitive(s, "properties"), name, p);
+    if (required)
+        cJSON_AddItemToArray(cJSON_GetObjectItemCaseSensitive(s, "required"),
+                             cJSON_CreateString(name));
+}
+
+void schema_str_array(cJSON *s, const char *name, const char *desc, bool required) {
+    schema_array_of(s, name, "string", desc, required);
+}
+
+void schema_obj_array(cJSON *s, const char *name, const char *desc, bool required) {
+    schema_array_of(s, name, "object", desc, required);
+}

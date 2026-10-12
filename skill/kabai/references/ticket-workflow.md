@@ -91,6 +91,28 @@ kabai_create_ticket {"project_id": 4, "status_id": 12, "title": "Compress entity
 kabai_assign_ticket {"ticket_id": 123}
 ```
 
+### Several tickets at once
+
+- `kabai_create_ticket` accepts `tasks: [string]`, `parent_id`, `blocks: [id]`
+  and `blocked_by: [id]` and writes ticket, tasks and relations in ONE
+  transaction. An invalid value creates nothing and the error names it.
+- `kabai_create_tickets(project_id, items: [...])` creates up to 50 tickets
+  atomically. Each item takes the `create_ticket` fields plus `ref` (a
+  batch-local name such as `"t1"`). `parent`, `blocks` and `blocked_by` accept
+  ticket IDs or `"$t1"` references to earlier OR later items of the same call;
+  `$t1` inside `title`/`description` becomes `#<id>`, so cross-references are
+  real ticket numbers. An unknown or duplicate ref or an invalid item creates
+  nothing; the error names the item index and ref. The answer is
+  `[{ref, id, status_id}]`.
+- `kabai_add_task(ticket_id, titles: [...])` and
+  `kabai_link_tickets(links: [{from_ticket_id, to_ticket_id, relation_type}])`
+  are the atomic batch forms for tasks and relations.
+- **Write answers are slim:** `create_ticket` returns
+  `{id, project_id, status_id, title}`; pass `verbose: true` for the full echo.
+  Do not rely on the description coming back.
+- Assign (`kabai_assign_ticket`) only the tickets you actually start working;
+  the batch tools do not assign.
+
 ## 3. Tasks = acceptance criteria
 
 - For every acceptance criterion in the description, add one
