@@ -181,6 +181,86 @@ static cJSON *tool_docs_create_note(McpContext *ctx, cJSON *id, cJSON *params) {
     return mcp_tool_ok(id, note);
 }
 
+/* Markdown heading at the start of line [p, end): returns level 1..6 and sets
+ * *text to the trimmed heading text, or 0 if the line is not a heading. */
+static int heading_level(const char *p, const char *end, char *text, size_t cap) {
+    int level = 0;
+    while (p + level < end && p[level] == '#') level++;
+    if (level < 1 || level > 6 || p + level >= end || p[level] != ' ') return 0;
+    const char *s = p + level;
+    while (s < end && *s == ' ') s++;
+    while (end > s && (end[-1] == ' ' || end[-1] == '\r' || end[-1] == '\t')) end--;
+    snprintf(text, cap, "%.*s", (int)(end - s), s);
+    return level;
+}
+
+/* Replace the content of the section under `heading` (e.g. "## Results") up to
+ * the next heading of the same or higher level; everything else stays
+ * byte-identical. Headings inside fenced code blocks are ignored. Returns a
+ * malloc'd body, or NULL with a way-out message in err. */
+static char *replace_section(const char *body, const char *heading, const char *text,
+                             char *err, size_t errcap) {
+    char want[256];
+    int want_level = heading_level(heading, heading + strlen(heading), want, sizeof(want));
+    if (!want_level) {
+        snprintf(err, errcap, "Invalid replace_section: must be a markdown heading line like \"## Title\"");
+        return NULL;
+    }
+
+    size_t len = strlen(body), sec_start = 0, sec_end = len;
+    int matches = 0, in_sec = 0, fenced = 0;
+    char avail[400] = "";
+    for (size_t pos = 0; pos < len; ) {
+        const char *line = body + pos;
+        const char *nl = memchr(line, '\n', len - pos);
+        size_t line_len = nl ? (size_t)(nl - line) : len - pos;
+        size_t next = pos + line_len + (nl ? 1 : 0);
+        if (strncmp(line, "```", 3) == 0 || strncmp(line, "~~~", 3) == 0) fenced = !fenced;
+        char htext[256];
+        int lvl = fenced ? 0 : heading_level(line, line + line_len, htext, sizeof(htext));
+        if (lvl) {
+            if (in_sec && lvl <= want_level) { sec_end = pos; in_sec = 0; }
+            if (lvl == want_level && strcmp(htext, want) == 0) {
+                if (++matches == 1) { sec_start = next; in_sec = 1; }
+            }
+            size_t used = strlen(avail);
+            if (used + 40 < sizeof(avail))
+                snprintf(avail + used, sizeof(avail) - used, "%s\"%.*s\"", used ? ", " : "", (int)line_len, line);
+        }
+        pos = next;
+    }
+    if (matches != 1) {
+        if (matches == 0)
+            snprintf(err, errcap, "Heading not found: %s. Headings in this note: %s. "
+                     "Use one of them verbatim, or use append.", heading, avail[0] ? avail : "(none)");
+        else
+            snprintf(err, errcap, "Heading is ambiguous (%d matches): %s. "
+                     "Rename one of them, or replace the whole body.", matches, heading);
+        return NULL;
+    }
+
+    size_t tlen = strlen(text);
+    char *out = malloc(len + tlen + 8);
+    if (!out) { snprintf(err, errcap, "Out of memory"); return NULL; }
+    size_t n = sec_start;
+    memcpy(out, body, n);
+    if (n > 0 && out[n - 1] != '\n') out[n++] = '\n';
+    if (tlen > 0) {
+        out[n++] = '\n';
+        memcpy(out + n, text, tlen); n += tlen;
+        if (text[tlen - 1] != '\n') out[n++] = '\n';
+        if (sec_end < len) out[n++] = '\n';
+    }
+    memcpy(out + n, body + sec_end, len - sec_end);
+    out[n + len - sec_end] = '\0';
+    return out;
+}
+
+static cJSON *tx_fail(McpContext *ctx, cJSON *id, const char *msg) {
+    db_rollback_transaction(ctx->db);
+    return mcp_tool_err(id, msg);
+}
+
 static cJSON *tool_docs_update_note(McpContext *ctx, cJSON *id, cJSON *params) {
     int note_id;
     if (!param_num(params, "note_id", &note_id))
@@ -189,6 +269,10 @@ static cJSON *tool_docs_update_note(McpContext *ctx, cJSON *id, cJSON *params) {
     const char *title = param_str(params, "title");
     const char *body  = param_str(params, "body");
     const char *kind  = param_str(params, "kind");
+    const char *append = param_str(params, "append");
+    const char *section = param_str(params, "replace_section");
+    const char *section_body = param_str(params, "section_body");
+    const char *expected = param_str(params, "expected_updated_at");
     cJSON *tags_j = cJSON_GetObjectItemCaseSensitive(params, "tags");
     char *tags = NULL;
     if (cJSON_IsArray(tags_j)) {
@@ -198,18 +282,74 @@ static cJSON *tool_docs_update_note(McpContext *ctx, cJSON *id, cJSON *params) {
     int ticket_id = 0;
     param_num(params, "ticket_id", &ticket_id);
 
-    if (!title && !body && !kind && !tags) {
-        return mcp_tool_err(id, "No updatable fields provided (title, body, kind, tags)");
+    if (!title && !body && !kind && !tags && !append && !section) {
+        free(tags);
+        return mcp_tool_err(id, "No updatable fields provided (title, body, append, replace_section, kind, tags)");
+    }
+    if ((body && (append || section)) || (append && section)) {
+        free(tags);
+        return mcp_tool_err(id, "Use only one of body, append, replace_section per call");
+    }
+    if (section && !section_body) {
+        free(tags);
+        return mcp_tool_err(id, "replace_section needs section_body (new content; empty string clears the section)");
     }
 
     char note_id_str[32], ticket_id_str[32];
     snprintf(note_id_str, sizeof(note_id_str), "%d", note_id);
     snprintf(ticket_id_str, sizeof(ticket_id_str), "%d", ticket_id);
 
+    /* append, replace_section and expected_updated_at need the current row:
+     * read it under a row lock so check and write are atomic. */
+    bool tx = append || section || expected;
+    char *new_body = NULL;
+    if (tx) {
+        db_begin_transaction(ctx->db);
+        const char *sel_params[1] = {note_id_str};
+        PGresult *cur = PQexecParams(ctx->db->conn,
+            "SELECT body, updated_at::text FROM notes WHERE id = $1 FOR UPDATE",
+            1, NULL, sel_params, NULL, NULL, 0);
+        if (!cur || PQresultStatus(cur) != PGRES_TUPLES_OK || PQntuples(cur) == 0) {
+            bool missing = cur && PQresultStatus(cur) == PGRES_TUPLES_OK;
+            if (cur) PQclear(cur);
+            free(tags);
+            return tx_fail(ctx, id, missing ? "Note not found" : "Failed to read note");
+        }
+        const char *cur_body = PQgetvalue(cur, 0, 0);
+        const char *cur_ts = PQgetvalue(cur, 0, 1);
+        char err[700] = "";
+        if (expected && strcmp(expected, cur_ts) != 0) {
+            snprintf(err, sizeof(err),
+                "Conflict: note changed since you read it (expected_updated_at=%s, current updated_at=%s). "
+                "Re-read with kabai_docs_get_note, re-apply your change, then retry with "
+                "expected_updated_at=%s.", expected, cur_ts, cur_ts);
+        } else if (section) {
+            new_body = replace_section(cur_body, section, section_body, err, sizeof(err));
+        } else if (append) {
+            size_t bl = strlen(cur_body), al = strlen(append);
+            new_body = malloc(bl + al + 4);
+            if (new_body) {
+                memcpy(new_body, cur_body, bl);
+                size_t n = bl;
+                if (n > 0 && new_body[n - 1] != '\n') new_body[n++] = '\n';
+                if (n > 0 && (n < 2 || new_body[n - 2] != '\n')) new_body[n++] = '\n';
+                memcpy(new_body + n, append, al); n += al;
+                if (al == 0 || append[al - 1] != '\n') new_body[n++] = '\n';
+                new_body[n] = '\0';
+            }
+        }
+        PQclear(cur);
+        if (err[0] || (!new_body && (append || section))) {
+            free(tags);
+            free(new_body);
+            return tx_fail(ctx, id, err[0] ? err : "Out of memory");
+        }
+    }
+
     /* COALESCE keeps unspecified fields; updated_by_ticket_id records
      * provenance for the future revision history (#339). */
     const char *upd_params[6] = {
-        note_id_str, title, body, kind, tags,
+        note_id_str, title, new_body ? new_body : body, kind, tags,
         ticket_id > 0 ? ticket_id_str : NULL
     };
     PGresult *res = PQexecParams(ctx->db->conn,
@@ -219,21 +359,27 @@ static cJSON *tool_docs_update_note(McpContext *ctx, cJSON *id, cJSON *params) {
         "  kind  = COALESCE($4, kind), "
         "  tags  = COALESCE($5::text[], tags), "
         "  updated_by_ticket_id = COALESCE($6::int, updated_by_ticket_id) "
-        "WHERE id = $1 RETURNING " NOTE_BRIEF_COLS,
+        "WHERE id = $1 RETURNING " NOTE_BRIEF_COLS ", updated_at::text, length(body)",
         6, NULL, upd_params, NULL, NULL, 0);
     free(tags);
+    free(new_body);
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         const char *msg = docs_db_error(res);
         if (res) PQclear(res);
+        if (tx) return tx_fail(ctx, id, msg ? msg : "Failed to update note");
         return mcp_tool_err(id, msg ? msg : "Failed to update note");
     }
     if (PQntuples(res) == 0) {
         PQclear(res);
+        if (tx) return tx_fail(ctx, id, "Note not found");
         return mcp_tool_err(id, "Note not found");
     }
+    if (tx) db_commit_transaction(ctx->db);
 
     cJSON *note = note_row_brief(res, 0);
+    cJSON_AddStringToObject(note, "updated_at", PQgetvalue(res, 0, 6));
+    cJSON_AddNumberToObject(note, "body_chars", atoi(PQgetvalue(res, 0, 7)));
     PQclear(res);
     return mcp_tool_ok(id, note);
 }
@@ -482,6 +628,7 @@ static cJSON *tool_docs_list_notes(McpContext *ctx, cJSON *id, cJSON *params) {
     param_num(params, "limit", &limit);
     param_num(params, "offset", &offset);
     const char *kind = param_str(params, "kind");
+    const char *slug_prefix = param_str(params, "slug_prefix");
     const char *tag  = param_str(params, "tag");
     bool summary = param_bool(params, "summary", false);
     bool include_archived = param_bool(params, "include_archived", false);
@@ -494,13 +641,14 @@ static cJSON *tool_docs_list_notes(McpContext *ctx, cJSON *id, cJSON *params) {
     snprintf(offset_str, sizeof(offset_str), "%d", offset);
     snprintf(days_str, sizeof(days_str), "%d", unverified_days);
 
-    const char *q_params[7] = {
+    const char *q_params[8] = {
         project_id > 0 ? proj_str : NULL,
         kind, tag,
         include_archived ? "t" : "f",
         limit > 0 ? limit_str : NULL,
         offset > 0 ? offset_str : NULL,
-        unverified_days >= 0 ? days_str : NULL
+        unverified_days >= 0 ? days_str : NULL,
+        slug_prefix
     };
     PGresult *res = PQexecParams(ctx->db->conn,
         "SELECT id, slug, title, kind, tags::text, archived, "
@@ -514,9 +662,10 @@ static cJSON *tool_docs_list_notes(McpContext *ctx, cJSON *id, cJSON *params) {
         "  AND ($4::bool OR NOT n.archived) "
         "  AND ($7::int IS NULL OR n.last_verified_at IS NULL "
         "       OR n.last_verified_at < NOW() - make_interval(days => $7::int)) "
+        "  AND ($8::text IS NULL OR starts_with(lower(n.slug), lower($8))) "
         "ORDER BY n.updated_at DESC "
         "LIMIT COALESCE($5::int, 100) OFFSET COALESCE($6::int, 0)",
-        7, NULL, q_params, NULL, NULL, 0);
+        8, NULL, q_params, NULL, NULL, 0);
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         const char *msg = docs_db_error(res);
@@ -663,6 +812,18 @@ static cJSON *search_rows_to_json(PGresult *res, const char *match_type) {
     return arr;
 }
 
+/* Append rows of src to dst unless a note with that id is already in dst. */
+static void merge_unique(cJSON *dst, cJSON *src) {
+    cJSON *o;
+    cJSON_ArrayForEach(o, src) {
+        int dup = 0;
+        cJSON *e;
+        cJSON_ArrayForEach(e, dst)
+            if (cJSON_GetObjectItem(e, "id")->valueint == cJSON_GetObjectItem(o, "id")->valueint) dup = 1;
+        if (!dup) cJSON_AddItemToArray(dst, cJSON_Duplicate(o, 1));
+    }
+}
+
 static cJSON *tool_docs_search(McpContext *ctx, cJSON *id, cJSON *params) {
     const char *query = param_str(params, "query");
     if (!query || query[0] == '\0')
@@ -684,8 +845,28 @@ static cJSON *tool_docs_search(McpContext *ctx, cJSON *id, cJSON *params) {
         limit > 0 ? limit_str : NULL
     };
 
-    /* Primary: weighted full-text search ('simple' config, ADR D3). */
+    /* Slug hits first: the slug is the stable key agents know, and FTS does
+     * not index it. Substring match (strpos: no LIKE-escaping needed). */
     PGresult *res = PQexecParams(ctx->db->conn,
+        "SELECT n.id, n.slug, n.title, n.kind, n.tags::text, n.archived, "
+        "       '1' AS rank, left(n.body, 160) AS snippet, "
+        "       length(n.body) AS body_chars "
+        "FROM notes n "
+        "WHERE strpos(lower(n.slug), lower($1)) > 0 "
+        SEARCH_FILTERS
+        "ORDER BY (lower(n.slug) = lower($1)) DESC, "
+        "         starts_with(lower(n.slug), lower($1)) DESC, n.slug "
+        "LIMIT COALESCE($5::int, 20)",
+        5, NULL, q_params, NULL, NULL, 0);
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        if (res) PQclear(res);
+        return mcp_tool_err(id, "Search failed");
+    }
+    cJSON *arr = search_rows_to_json(res, "slug");
+    PQclear(res);
+
+    /* Weighted full-text search ('simple' config, ADR D3). */
+    res = PQexecParams(ctx->db->conn,
         "SELECT n.id, n.slug, n.title, n.kind, n.tags::text, n.archived, "
         "       ts_rank(n.search_tsv, q)::text AS rank, "
         "       ts_headline('simple', n.body, q, "
@@ -700,39 +881,57 @@ static cJSON *tool_docs_search(McpContext *ctx, cJSON *id, cJSON *params) {
 
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
         if (res) PQclear(res);
+        cJSON_Delete(arr);
         return mcp_tool_err(id, "Search failed (invalid query syntax?)");
     }
+    cJSON *fts = search_rows_to_json(res, "fts");
+    PQclear(res);
+    merge_unique(arr, fts);
+    int found_fts = cJSON_GetArraySize(fts);
+    cJSON_Delete(fts);
 
-    if (PQntuples(res) > 0) {
-        cJSON *arr = search_rows_to_json(res, "fts");
+    /* Fallback only when FTS found nothing: trigram similarity on titles —
+     * catches typos and partial identifiers that FTS tokenisation misses. */
+    if (found_fts == 0) {
+        res = PQexecParams(ctx->db->conn,
+            "SELECT n.id, n.slug, n.title, n.kind, n.tags::text, n.archived, "
+            "       similarity(n.title, $1)::text AS rank, "
+            "       left(n.body, 160) AS snippet, "
+            "       length(n.body) AS body_chars "
+            "FROM notes n "
+            "WHERE n.title % $1 "
+            SEARCH_FILTERS
+            "ORDER BY similarity(n.title, $1) DESC "
+            "LIMIT COALESCE($5::int, 20)",
+            5, NULL, q_params, NULL, NULL, 0);
+        if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+            if (res) PQclear(res);
+            cJSON_Delete(arr);
+            return mcp_tool_err(id, "Search failed");
+        }
+        cJSON *sim = search_rows_to_json(res, "title_similarity");
         PQclear(res);
-        return mcp_tool_ok(id, arr);
-    }
-    PQclear(res);
-
-    /* Fallback: trigram similarity on titles — catches typos and partial
-     * identifiers that FTS tokenisation misses. */
-    res = PQexecParams(ctx->db->conn,
-        "SELECT n.id, n.slug, n.title, n.kind, n.tags::text, n.archived, "
-        "       similarity(n.title, $1)::text AS rank, "
-        "       left(n.body, 160) AS snippet, "
-        "       length(n.body) AS body_chars "
-        "FROM notes n "
-        "WHERE n.title % $1 "
-        SEARCH_FILTERS
-        "ORDER BY similarity(n.title, $1) DESC "
-        "LIMIT COALESCE($5::int, 20)",
-        5, NULL, q_params, NULL, NULL, 0);
-
-    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
-        if (res) PQclear(res);
-        return mcp_tool_err(id, "Search failed");
+        merge_unique(arr, sim);
+        cJSON_Delete(sim);
     }
 
-    cJSON *arr = search_rows_to_json(res, "title_similarity");
-    PQclear(res);
+    int max = limit > 0 ? limit : 20;
+    while (cJSON_GetArraySize(arr) > max) cJSON_DeleteItemFromArray(arr, max);
+
+    if (cJSON_GetArraySize(arr) == 0) {
+        /* An empty list must not read as "does not exist". */
+        cJSON_Delete(arr);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddItemToObject(o, "results", cJSON_CreateArray());
+        cJSON_AddStringToObject(o, "note",
+            "No match. Searched: title, body, tags (full-text, word-based) and slug (substring), "
+            "plus typo-tolerant title similarity; archived notes are excluded. "
+            "To check a slug range use kabai_docs_list_notes with slug_prefix.");
+        return mcp_tool_ok(id, o);
+    }
     return mcp_tool_ok(id, arr);
 }
+
 
 
 /* ============================================================================
@@ -883,6 +1082,10 @@ void docs_register_tools(McpRegistry *r) {
     schema_num(s, "note_id", "Numeric note ID", true);
     schema_str(s, "title", "New title (optional)", false);
     schema_str(s, "body",  "New markdown body, replaces the old one (optional)", false);
+    schema_str(s, "append", "Markdown to append at the end of the existing body, after a blank line - no need to send the rest (optional; exclusive with body and replace_section)", false);
+    schema_str(s, "replace_section", "Heading line of the section to replace, verbatim incl. level, e.g. \"## Results\". Replaces the text up to the next heading of the same or higher level; the rest stays byte-identical. Errors list the available headings if missing or ambiguous (optional; needs section_body)", false);
+    schema_str(s, "section_body", "New content of the section (without the heading line); empty string clears it", false);
+    schema_str(s, "expected_updated_at", "Concurrency guard (optional, default: none = last write wins): the updated_at you got from get_note or the last update. If the note changed since, nothing is written and the error names the current updated_at - re-read, re-apply, retry", false);
     schema_str(s, "kind",  "New kind: note, adr, or hub (optional)", false);
     {
         cJSON *arr = cJSON_CreateObject();
@@ -896,6 +1099,8 @@ void docs_register_tools(McpRegistry *r) {
     schema_num(s, "ticket_id", "Ticket that caused this update (optional but recommended — provenance for the revision history)", false);
     mcp_registry_add(r, "kabai_docs_update_note",
         "Update fields of a note. Unspecified fields keep their value; the slug is permanent. "
+        "For long notes use append or replace_section instead of resending the whole body; "
+        "with parallel agents pass expected_updated_at. Returns id, slug, title, kind, tags, archived, updated_at, body_chars (no body echo). "
         "If the old content is superseded rather than corrected, consider a NEW note "
         "plus a 'supersedes' link instead of overwriting history.",
         s, tool_docs_update_note);
@@ -960,6 +1165,7 @@ void docs_register_tools(McpRegistry *r) {
     schema_num(s, "limit",      "Max notes to return (optional, default 100)", false);
     schema_num(s, "offset",     "Notes to skip for pagination (optional, default 0)", false);
     schema_bool(s, "include_archived", "Include archived notes (default false)", false);
+    schema_str(s, "slug_prefix", "Only notes whose slug starts with this prefix, case-insensitive (optional) - cheap way to check number ranges such as \"adr-studio-02\"", false);
     schema_num(s, "unverified_since_days",
         "Only notes whose last verification is older than N days or missing — "
         "use for staleness reviews (optional)", false);
@@ -970,14 +1176,14 @@ void docs_register_tools(McpRegistry *r) {
         s, tool_docs_list_notes);
 
     s = schema_new();
-    schema_str(s, "query",      "Free-text search (words, phrases in quotes, -exclusions). Matches title, tags, and body.", true);
+    schema_str(s, "query",      "Free-text search (words, phrases in quotes, -exclusions). Matches title, tags, body and slug (substring; slug hits come first).", true);
     schema_num(s, "project_id", "Restrict to one project (optional — omit for a global search)", false);
     schema_str(s, "kind",       "Filter by kind: note, adr, or hub (optional)", false);
     schema_str(s, "tag",        "Filter by tag (optional)", false);
     schema_num(s, "limit",      "Max results (optional, default 20)", false);
     mcp_registry_add(r, "kabai_docs_search",
         "Full-text search over the knowledge base. Returns ranked matches with a snippet, "
-        "match_type (fts, or title_similarity as typo-tolerant fallback) and body_chars "
+        "match_type (slug, fts, or title_similarity as typo-tolerant fallback) and body_chars "
         "for judging retrieval cost. Use this BEFORE create_note to detect duplicates and "
         "BEFORE reading code to check what is already documented.",
         s, tool_docs_search);

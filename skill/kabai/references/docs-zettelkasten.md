@@ -26,13 +26,17 @@ work" question:
 kabai_docs_search {"query": "delta compression", "project_id": 4}
 ```
 
-- Hits are ranked, carry a snippet, `match_type` (`fts`, or
-  `title_similarity` as typo-tolerant fallback) and `body_chars`.
+- Hits are ranked, carry a snippet, `match_type` (`slug` first, then `fts`, or
+  `title_similarity` as typo-tolerant fallback) and `body_chars`. The slug is
+  matched as a substring too.
 - If a note on the topic exists: **update it** (`kabai_docs_update_note`)
   instead of creating a near-duplicate. NEVER create a second note for the
   same concept.
-- An empty result means the topic is genuinely undocumented — that is your
-  cue to write the note once you know the answer.
+- An empty result (`{"results":[],"note":…}`) says what was searched (title,
+  body, tags, slug; word-based, so not every partial string). It is your cue
+  to write the note once you know the answer. To check a number range such
+  as ADR numbers, use `kabai_docs_list_notes {"slug_prefix": "adr-foo-02",
+  "summary": true}`.
 
 ## 2. Atomicity
 
@@ -126,6 +130,12 @@ knowledge from the ticket side (`kabai_get_ticket_detailed` returns
   confirmed recently.
 - **Update:** `kabai_docs_update_note` changes only the fields you pass
   (title/body/kind/tags). Always pass `ticket_id` — it records provenance.
+  For long notes send only the change: `append` (text added at the end) or
+  `replace_section` + `section_body` (heading line verbatim, e.g.
+  `"## Results"`; everything else stays byte-identical). With parallel
+  agents pass `expected_updated_at` (the `updated_at` from `get_note` or
+  your last update): on `Conflict` re-read, re-apply, retry with the
+  returned `updated_at`. Without it the last write wins.
   If the old content is *superseded* rather than corrected, write a new
   note plus a `supersedes` link instead (see §4).
 - **Archive:** `kabai_docs_archive_note {"note_id": N, "reason": "…"}` —

@@ -141,9 +141,9 @@ kabai/
 ### Knowledge base
 | Tool | Purpose |
 |------|---------|
-| `kabai_docs_create_note` / `kabai_docs_update_note` / `kabai_docs_archive_note` | atomic notes (kind: note/adr/hub, tags, permanent slug) |
-| `kabai_docs_get_note` / `kabai_docs_list_notes` | reading incl. link neighbourhood; summary mode + body_chars |
-| `kabai_docs_search` | weighted full-text search with trigram fallback |
+| `kabai_docs_create_note` / `kabai_docs_update_note` / `kabai_docs_archive_note` | atomic notes (kind: note/adr/hub, tags, permanent slug); update supports `append`, `replace_section`, `expected_updated_at` |
+| `kabai_docs_get_note` / `kabai_docs_list_notes` | reading incl. link neighbourhood; summary mode + body_chars; `slug_prefix` filter |
+| `kabai_docs_search` | weighted full-text search (slug hits first) with trigram fallback |
 | `kabai_docs_link_notes` / `kabai_docs_unlink_notes` | typed graph: references, contains, supersedes, contradicts |
 | `kabai_docs_link_ticket` / `kabai_docs_unlink_ticket` | note↔ticket relations |
 | `kabai_docs_verify_note` | staleness metadata (last verified by/at) |
