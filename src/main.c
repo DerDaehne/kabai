@@ -24,7 +24,7 @@
 #include "canvas/canvas_tools.h"
 
 #define MCP_PROTOCOL_VERSION "2024-11-05"
-#define MCP_SERVER_VERSION   "0.6.0"
+#define MCP_SERVER_VERSION   "0.7.0"
 #define MCP_SERVER_NAME      "kabai"
 
 #define DEFAULT_DB_HOST     "localhost"

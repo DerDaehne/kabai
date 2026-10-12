@@ -14,7 +14,7 @@
       {
         packages.default = pkgs.stdenv.mkDerivation {
           name = "kabai";
-          version = "0.6.0";
+          version = "0.7.0";
           src = ./.;
 
           nativeBuildInputs = with pkgs; [ gcc pkg-config ];
@@ -113,7 +113,7 @@
           in
           pkgsWin.stdenv.mkDerivation {
             name = "kabai-windows";
-            version = "0.6.0";
+            version = "0.7.0";
             src = ./.;
 
             nativeBuildInputs = [ pkgsWin.buildPackages.pkg-config ];
