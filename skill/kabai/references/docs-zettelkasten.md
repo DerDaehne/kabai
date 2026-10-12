@@ -75,7 +75,8 @@ kabai_docs_create_note {
   NEW note plus a `supersedes` link (§4) and changing the old note's first
   line to `ERSETZT durch <new slug>` — even when the old ADR is only minutes
   old, as soon as it was communicated. The old body stays untouched
-  otherwise (history).- **tags** — lowercase topic words for filtering (they are also
+  otherwise (history).
+- **tags** — lowercase topic words for filtering (they are also
   search-indexed). Reuse existing tags (`kabai_docs_list_notes` shows
   them) instead of inventing synonyms.
 - **project_ids** — 0..n projects; the zettelkasten is global. Knowledge

@@ -1071,13 +1071,16 @@ static cJSON *update_ticket_fields(McpContext *ctx, cJSON *id, cJSON *params, in
         snprintf(tid_str, sizeof(tid_str), "%d", ticket_id);
         const char *dp[2] = {tid_str,
                              param_bool(params, "docs_required", false) ? "t" : "f"};
+        db_clear_error(ctx->db);
         PGresult *dres = PQexecParams(ctx->db->conn,
-            "UPDATE tickets SET docs_required = $2::bool WHERE id = $1",
+            "UPDATE tickets SET docs_required = $2::bool, updated_at = NOW() WHERE id = $1",
             2, NULL, dp, NULL, NULL, 0);
         if (dres && PQresultStatus(dres) == PGRES_COMMAND_OK &&
             atoi(PQcmdTuples(dres)) > 0)
             updated += 1;
-        else if (dres && strstr(PQresultErrorMessage(dres), "Epic documentation duty")) {
+        else if (dres && PQresultStatus(dres) != PGRES_COMMAND_OK)
+            db_capture_error(ctx->db, dres);
+        if (dres && strstr(PQresultErrorMessage(dres), "Epic documentation duty")) {
             PQclear(dres);
             return mcp_tool_err(id,
                 "docs_required cannot be unset on an epic: an epic must not close "

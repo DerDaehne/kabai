@@ -24,7 +24,8 @@ int db_commit_transaction(DatabaseConnection *db) {
     }
     
     PGresult *res = PQexec(db->conn, "COMMIT");
-    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK ||
+        strcmp(PQcmdStatus(res), "COMMIT") != 0) {
         if (res) PQclear(res);
         return 0;
     }
