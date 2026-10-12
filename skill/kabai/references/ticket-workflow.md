@@ -204,6 +204,13 @@ may cross projects. Remove wrong links with
   current: when scope changes mid-work, update the description AND leave a
   comment about the change. Pass `description: null` to clear. When
   unsetting `docs_required`, justify it in a comment.
+- **Parallel agents: re-read before you update, and guard the write.** Read
+  the ticket (`kabai_get_ticket`) right before editing and pass its
+  `updated_at` as `expected_updated_at`. If the ticket changed in between,
+  nothing is written and the `Conflict` error names the current `updated_at`:
+  re-read, re-apply your change on top, retry with the new value. A successful
+  guarded update returns the new `updated_at` for the next one. Without the
+  parameter the last write wins and can silently overwrite a concurrent edit.
 - **Effort fields are structured, not the free-text estimate in the
   description.** `effort_estimate`/`effort_actual` are plain numbers,
   `effort_unit` is free text (days, story points, tokens — pick whatever

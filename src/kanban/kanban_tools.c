@@ -1043,11 +1043,10 @@ static cJSON *tool_assign_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     return mcp_tool_ok(id, r);
 }
 
-static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
-    int ticket_id;
-    if (!param_num(params, "ticket_id", &ticket_id))
-        return mcp_tool_err(id, "Missing required parameter: ticket_id");
-
+/* in_tx: running under the expected_updated_at lock; stop at the first failed
+ * statement so the caller reports its error instead of "transaction aborted". */
+static cJSON *update_ticket_fields(McpContext *ctx, cJSON *id, cJSON *params, int ticket_id,
+                                   bool in_tx) {
     int updated = 0;
     int provided = 0;
 
@@ -1055,6 +1054,7 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     if (title) {
         provided++;
         updated += ticket_update_title(ctx->db, ticket_id, title);
+        if (in_tx && ctx->db->last_primary[0]) goto done;
     }
 
     if (param_present(params, "description")) {
@@ -1062,6 +1062,7 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         const char *new_desc = param_is_null(params, "description")
                              ? NULL : param_str(params, "description");
         updated += ticket_update_description(ctx->db, ticket_id, new_desc);
+        if (in_tx && ctx->db->last_primary[0]) goto done;
     }
 
     if (param_present(params, "docs_required")) {
@@ -1085,6 +1086,8 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         if (dres) PQclear(dres);
     }
 
+    if (in_tx && ctx->db->last_primary[0]) goto done;
+
     if (param_present(params, "effort_estimate")) {
         provided++;
         double v;
@@ -1097,6 +1100,7 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
             estr = buf;
         }
         updated += ticket_update_effort_estimate(ctx->db, ticket_id, estr);
+        if (in_tx && ctx->db->last_primary[0]) goto done;
     }
 
     if (param_present(params, "effort_actual")) {
@@ -1111,6 +1115,7 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
             astr = buf;
         }
         updated += ticket_update_effort_actual(ctx->db, ticket_id, astr);
+        if (in_tx && ctx->db->last_primary[0]) goto done;
     }
 
     if (param_present(params, "effort_unit")) {
@@ -1118,8 +1123,10 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
         const char *unit = param_is_null(params, "effort_unit")
                           ? NULL : param_str(params, "effort_unit");
         updated += ticket_update_effort_unit(ctx->db, ticket_id, unit);
+        if (in_tx && ctx->db->last_primary[0]) goto done;
     }
 
+done:
     if (!provided)
         return mcp_tool_err(id, "No updatable fields provided (title, description, docs_required, "
                                  "effort_estimate, effort_actual, effort_unit)");
@@ -1131,7 +1138,71 @@ static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "success", 1);
     cJSON_AddNumberToObject(r, "updated_fields", updated);
+    if (in_tx) {  /* the token for the next expected_updated_at */
+        char tid[32];
+        snprintf(tid, sizeof(tid), "%d", ticket_id);
+        const char *p[1] = {tid};
+        PGresult *res = PQexecParams(ctx->db->conn,
+            "SELECT updated_at::text FROM tickets WHERE id = $1", 1, NULL, p, NULL, NULL, 0);
+        if (res && PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0)
+            cJSON_AddStringToObject(r, "updated_at", PQgetvalue(res, 0, 0));
+        if (res) PQclear(res);
+    }
     return mcp_tool_ok(id, r);
+}
+
+static bool is_tool_error(const cJSON *resp) {
+    const cJSON *result = cJSON_GetObjectItemCaseSensitive(resp, "result");
+    return cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(result, "isError"));
+}
+
+static cJSON *tool_update_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
+    int ticket_id;
+    if (!param_num(params, "ticket_id", &ticket_id))
+        return mcp_tool_err(id, "Missing required parameter: ticket_id");
+    const char *expected = param_str(params, "expected_updated_at");
+    if (!expected) return update_ticket_fields(ctx, id, params, ticket_id, false);
+
+    /* Check and write under a row lock so no other writer slips in between. */
+    if (!db_begin_transaction(ctx->db)) return mcp_tool_err(id, "Failed to start transaction");
+    char tid[32];
+    snprintf(tid, sizeof(tid), "%d", ticket_id);
+    const char *sel[1] = {tid};
+    PGresult *cur = PQexecParams(ctx->db->conn,
+        "SELECT updated_at::text FROM tickets WHERE id = $1 FOR NO KEY UPDATE",
+        1, NULL, sel, NULL, NULL, 0);
+    if (!cur || PQresultStatus(cur) != PGRES_TUPLES_OK || PQntuples(cur) == 0) {
+        bool missing = cur && PQresultStatus(cur) == PGRES_TUPLES_OK;
+        if (cur) PQclear(cur);
+        return tx_fail(ctx, id, missing ? "Ticket not found" : "Failed to read ticket");
+    }
+    char current[64];
+    snprintf(current, sizeof(current), "%s", PQgetvalue(cur, 0, 0));
+    PQclear(cur);
+    if (strcmp(expected, current) != 0) {
+        char err[400];
+        snprintf(err, sizeof(err),
+            "Conflict: ticket changed since you read it (expected_updated_at=%s, current "
+            "updated_at=%s). Re-read with kabai_get_ticket, re-apply your change, then retry "
+            "with expected_updated_at=%s.", expected, current, current);
+        return tx_fail(ctx, id, err);
+    }
+
+    db_clear_error(ctx->db);
+    cJSON *resp = update_ticket_fields(ctx, id, params, ticket_id, true);
+    if (is_tool_error(resp)) {
+        db_rollback_transaction(ctx->db);
+        return resp;
+    }
+    if (ctx->db->last_primary[0]) {  /* a partial write must not commit */
+        cJSON_Delete(resp);
+        return tx_db_fail(ctx, id, NULL, "Failed to update ticket");
+    }
+    if (!db_commit_transaction(ctx->db)) {
+        cJSON_Delete(resp);
+        return tx_fail(ctx, id, "Failed to commit transaction");
+    }
+    return resp;
 }
 
 static cJSON *tool_delete_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
@@ -2032,10 +2103,16 @@ void kanban_register_tools(McpRegistry *r) {
         "Free-text unit for effort_estimate/effort_actual (e.g. days, story points, tokens), "
         "or null to clear (optional).",
         false);
+    schema_str(s, "expected_updated_at",
+        "Concurrency guard (optional, default: none = last write wins): the updated_at you got from "
+        "get_ticket or the last update. If the ticket changed since, nothing is written and the "
+        "Conflict error names the current updated_at - re-read, re-apply, retry. On success the "
+        "answer carries the new updated_at", false);
     mcp_registry_add(r, "kabai_update_ticket",
         "Edit a ticket's title, description, docs_required flag, and/or effort tracking "
         "(effort_estimate/effort_actual/effort_unit — generic, unit-agnostic; MCP has no "
-        "protocol-level usage/cost data to fill this automatically)",
+        "protocol-level usage/cost data to fill this automatically). With parallel agents pass "
+        "expected_updated_at to avoid silently overwriting a concurrent edit",
         s, tool_update_ticket);
 
     s = schema_new();
