@@ -74,6 +74,7 @@ its children. So place children inside the frame's rectangle
 the frame a `width`/`height` that encloses them, and when you move a frame,
 move its children by the same offset. Read the frame's position and size
 from `kabai_get_canvas` before placing children.
+
 ## 4. description (alt-text) is MANDATORY for image and sketch
 
 `kabai_add_canvas_element` REJECTS an `image` or `sketch` element without
