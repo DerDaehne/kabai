@@ -27,7 +27,13 @@ At the start of any session that touches kabai, in this order:
    **follow it** — it defines your role (e.g. architect vs. developer) and
    its definition of done. Columns without instruction carry no extra rules.
 4. `kabai_list_status_transitions(project_id)` — learn the workflow graph
-   before you move anything.
+   before you move anything. Entries with `implicit: true` are not stored
+   but always allowed (any column -> human_intervention, human_answered ->
+   any column), so the list covers every move the database accepts.
+5. To find work: `kabai_list_tickets(project_id, workable: true)` returns
+   only pickup-ready tickets (unassigned, no open `blocks` predecessor, in
+   a column with an `agent_role_instruction`, with `open_tasks`). Do not
+   check predecessors one by one with `get_ticket_detailed`.
 
 **Archived projects are read-only.** `kabai_list_projects` excludes them by
 default — pass `include_archived: true` only when you specifically need to
@@ -113,7 +119,8 @@ belongs in a knowledge-base note, not in a comment — see the docs chapter.
 
 ## 5. Moving tickets
 
-- Move only via `kabai_move_ticket(ticket_id, new_status_id)` and only
+- Move only via `kabai_move_ticket(ticket_id, new_status_id)` (`status_id` is
+  accepted as alias, `new_status_id` on `create_ticket`) and only
   along edges returned by `kabai_list_status_transitions`. NEVER skip
   columns; the database rejects illegal transitions, but do not rely on
   trial and error — read the graph first.
@@ -129,7 +136,8 @@ belongs in a knowledge-base note, not in a comment — see the docs chapter.
 
 Columns with `special_type`:
 
-- `human_intervention`: escalation target, reachable from ANY column. When
+- `human_intervention`: escalation target, reachable from ANY column (listed
+  by `kabai_list_status_transitions` as `implicit: true` edges). When
   you are blocked on a decision only the human can make: write the question
   as a comment (full context, options, your recommendation), then
   `kabai_move_ticket` into the human_intervention column. Then stop working
@@ -149,7 +157,11 @@ NEVER guess on decisions that are the project owner's to make; escalate.
   when every child is done or explicitly descoped (comment on the epic
   saying which and why) AND its documentation duty is met: a note created
   or substantially updated during the epic, linked to it.
-- `blocks` — hard ordering: `from` must finish before `to` can start. Set
+- `blocks` — hard ordering: `from` must be done BEFORE `to` can start (`to`
+  waits for `from`). Prefer the natural reading with `relation_type:
+  "blocked_by"`: "from is blocked by to" is stored as "to blocks from".
+  `get_ticket_detailed.relations` states it from the ticket's own view:
+  `role` (`blocks` / `blocked_by`) plus a `meaning` sentence. Set
   it whenever you know the dependency; agents use it to pick workable
   tickets.
 - `duplicate_of` — mark the duplicate, keep the older/richer ticket, then
@@ -157,7 +169,9 @@ NEVER guess on decisions that are the project owner's to make; escalate.
   (`kabai_delete_ticket` requires a reason, e.g. "duplicate of #42").
 - `relates_to` — generic association when none of the above fits.
 
-Relations may cross projects. Remove wrong links with
+`link_type` is accepted as alias of `relation_type` (the name
+`kabai_docs_link_notes` uses; `relation_type` works there too). Relations
+may cross projects. Remove wrong links with
 `kabai_unlink_tickets` (exact same triple).
 
 ## 8. Editing and deleting
@@ -204,7 +218,9 @@ Relations may cross projects. Remove wrong links with
 `kabai_create_project(slug, name, description)`,
 `kabai_create_board_status(project_id, name, display_name, position,
 agent_role_instruction?)` and `kabai_create_status_transition(project_id,
-from_status_id, to_status_id)` set up new boards. Rules:
+from_status_id, to_status_id)` set up new boards;
+`kabai_delete_status_transition(project_id, from_status_id, to_status_id)`
+removes an edge (implicit human_* edges cannot be removed). Rules:
 
 - New projects automatically get human_intervention/human_answered columns.
 - Name the closing column `done` — the acceptance-criteria and

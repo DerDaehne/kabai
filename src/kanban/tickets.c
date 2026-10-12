@@ -223,12 +223,12 @@ static Ticket **parse_ticket_rows(PGresult *res) {
 }
 
 Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id,
-                               const char *type_filter, const char *assignee_filter,
+                               const char *type_filter, const char *assignee_filter, bool workable,
                                int limit, int offset) {
     if (!db) return NULL;
 
     /* Build query dynamically to avoid combinatorial explosion of variants */
-    char query[512];
+    char query[1536];
     const char *params[7];
     int nparams = 0;
     char proj_str[32], sid_str[32], lim_str[32], off_str[32];
@@ -261,6 +261,23 @@ Ticket **ticket_list_filtered(DatabaseConnection *db, int project_id, int status
         params[nparams++] = assignee_filter;
         qpos += snprintf(query + qpos, sizeof(query) - qpos,
                          " AND assignee = $%d", nparams);
+        if (qpos < 0 || qpos >= (int)sizeof(query)) return NULL;
+    }
+
+    if (workable) {
+        /* Pickup-ready (#799): unassigned, in a column agents may pick up from
+         * (not done, not human_*; without an explicit status_id only columns
+         * with a role instruction), and no blocks predecessor outside done. */
+        qpos += snprintf(query + qpos, sizeof(query) - qpos,
+            " AND (assignee IS NULL OR assignee = '')"
+            " AND status_id IN (SELECT id FROM board_statuses WHERE project_id = $1"
+            "   AND special_type IS NULL AND name <> 'done'%s)"
+            " AND NOT EXISTS (SELECT 1 FROM ticket_relations r"
+            "   JOIN tickets b ON b.id = r.from_ticket_id"
+            "   JOIN board_statuses bs ON bs.id = b.status_id"
+            "   WHERE r.to_ticket_id = tickets.id AND r.relation_type = 'blocks'"
+            "   AND bs.name <> 'done')",
+            status_id > 0 ? "" : " AND COALESCE(agent_role_instruction, '') <> ''");
         if (qpos < 0 || qpos >= (int)sizeof(query)) return NULL;
     }
 

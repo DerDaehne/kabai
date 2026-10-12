@@ -10,6 +10,7 @@
 #define MCP_SCHEMA_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <cjson/cJSON.h>
 
 /* {type:"object", properties:{}, required:[]} — an empty required array is
@@ -30,5 +31,14 @@ bool        param_bool(cJSON *params, const char *name, bool dflt);
 bool        param_is_null(cJSON *params, const char *name);
 /* Present at all, regardless of type. */
 bool        param_present(cJSON *params, const char *name);
+
+/* Aliases: first name present with the right type wins (#970). */
+bool        param_num_alias(cJSON *params, const char *name, const char *alias, int *out);
+const char *param_str_alias(cJSON *params, const char *name, const char *alias);
+
+/* "Missing required parameters: a, b" listing only entries with ok[i] false,
+ * so a parameter that was passed is never reported missing (#970). */
+const char *missing_params_msg(char *buf, size_t size, const char *const *names,
+                               const bool *ok, int count);
 
 #endif /* MCP_SCHEMA_H */

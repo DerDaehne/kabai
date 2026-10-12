@@ -498,11 +498,14 @@ static cJSON *tool_docs_archive_note(McpContext *ctx, cJSON *id, cJSON *params) 
 
 static cJSON *tool_docs_link_notes(McpContext *ctx, cJSON *id, cJSON *params) {
     int from_id, to_id;
-    const char *link_type = param_str(params, "link_type");
-    if (!param_num(params, "from_note_id", &from_id) ||
-        !param_num(params, "to_note_id", &to_id) || !link_type)
-        return mcp_tool_err(id,
-            "Missing required parameters: from_note_id, to_note_id, link_type");
+    const char *link_type = param_str_alias(params, "link_type", "relation_type");
+    bool ok[3] = {param_num(params, "from_note_id", &from_id),
+                  param_num(params, "to_note_id", &to_id), link_type != NULL};
+    if (!ok[0] || !ok[1] || !ok[2]) {
+        const char *names[3] = {"from_note_id", "to_note_id", "link_type (alias: relation_type)"};
+        char buf[200];
+        return mcp_tool_err(id, missing_params_msg(buf, sizeof(buf), names, ok, 3));
+    }
 
     char from_str[32], to_str[32];
     snprintf(from_str, sizeof(from_str), "%d", from_id);
@@ -526,11 +529,14 @@ static cJSON *tool_docs_link_notes(McpContext *ctx, cJSON *id, cJSON *params) {
 
 static cJSON *tool_docs_unlink_notes(McpContext *ctx, cJSON *id, cJSON *params) {
     int from_id, to_id;
-    const char *link_type = param_str(params, "link_type");
-    if (!param_num(params, "from_note_id", &from_id) ||
-        !param_num(params, "to_note_id", &to_id) || !link_type)
-        return mcp_tool_err(id,
-            "Missing required parameters: from_note_id, to_note_id, link_type");
+    const char *link_type = param_str_alias(params, "link_type", "relation_type");
+    bool ok[3] = {param_num(params, "from_note_id", &from_id),
+                  param_num(params, "to_note_id", &to_id), link_type != NULL};
+    if (!ok[0] || !ok[1] || !ok[2]) {
+        const char *names[3] = {"from_note_id", "to_note_id", "link_type (alias: relation_type)"};
+        char buf[200];
+        return mcp_tool_err(id, missing_params_msg(buf, sizeof(buf), names, ok, 3));
+    }
 
     char from_str[32], to_str[32];
     snprintf(from_str, sizeof(from_str), "%d", from_id);
@@ -1201,8 +1207,10 @@ void docs_register_tools(McpRegistry *r) {
     schema_num(s, "from_note_id", "Source note ID", true);
     schema_num(s, "to_note_id",   "Target note ID", true);
     schema_str(s, "link_type",
-        "One of: references (generic), contains (hub -> member, defines overview pages), "
-        "supersedes (from replaces to), contradicts (marks a detected inconsistency for review)", true);
+        "Canonical name of the link type. One of: references (generic), contains (hub -> member), "
+        "supersedes (from replaces to), contradicts (marks a detected inconsistency for review). "
+        "Required (alternatively pass it as relation_type, the name kabai_link_tickets uses)", false);
+    schema_str(s, "relation_type", "Alias of link_type (optional)", false);
     mcp_registry_add(r, "kabai_docs_link_notes",
         "Create a directed, typed link between two notes. Links are the structure of the "
         "zettelkasten: hubs use 'contains' to define collections, ADR succession uses "
@@ -1212,7 +1220,8 @@ void docs_register_tools(McpRegistry *r) {
     s = schema_new();
     schema_num(s, "from_note_id", "Source note ID", true);
     schema_num(s, "to_note_id",   "Target note ID", true);
-    schema_str(s, "link_type",    "The link to remove (must match exactly what was created)", true);
+    schema_str(s, "link_type",    "The link to remove (must match exactly what was created); required, alternatively as relation_type", false);
+    schema_str(s, "relation_type", "Alias of link_type (optional)", false);
     mcp_registry_add(r, "kabai_docs_unlink_notes",
         "Remove a directed link between two notes", s, tool_docs_unlink_notes);
 

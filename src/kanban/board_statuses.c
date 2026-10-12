@@ -210,3 +210,28 @@ void status_transition_free_array(StatusTransition **arr) {
         free(arr[i]);
     free(arr);
 }
+
+int status_transition_delete(DatabaseConnection *db, int project_id, int from_status_id,
+                             int to_status_id) {
+    if (!db) return -1;
+    db_clear_error(db);
+
+    char proj_str[32], from_str[32], to_str[32];
+    snprintf(proj_str, sizeof(proj_str), "%d", project_id);
+    snprintf(from_str, sizeof(from_str), "%d", from_status_id);
+    snprintf(to_str,   sizeof(to_str),   "%d", to_status_id);
+    const char *params[3] = {proj_str, from_str, to_str};
+
+    PGresult *res = PQexecParams(db->conn,
+        "DELETE FROM status_transitions"
+        " WHERE project_id = $1 AND from_status_id = $2 AND to_status_id = $3",
+        3, NULL, params, NULL, NULL, 0);
+    if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+        db_capture_error(db, res);
+        if (res) PQclear(res);
+        return -1;
+    }
+    int n = atoi(PQcmdTuples(res));
+    PQclear(res);
+    return n;
+}

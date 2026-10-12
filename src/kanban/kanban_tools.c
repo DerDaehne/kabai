@@ -131,9 +131,13 @@ static cJSON *tool_get_project(McpContext *ctx, cJSON *id, cJSON *params) {
 static cJSON *tool_create_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     int project_id, status_id;
     const char *title = param_str(params, "title");
-    if (!param_num(params, "project_id", &project_id) ||
-        !param_num(params, "status_id", &status_id) || !title)
-        return mcp_tool_err(id, "Missing required parameters: project_id, status_id, title");
+    bool ok[3] = {param_num(params, "project_id", &project_id),
+                  param_num_alias(params, "status_id", "new_status_id", &status_id), title != NULL};
+    if (!ok[0] || !ok[1] || !ok[2]) {
+        const char *names[3] = {"project_id", "status_id", "title"};
+        char buf[120];
+        return mcp_tool_err(id, missing_params_msg(buf, sizeof(buf), names, ok, 3));
+    }
 
     const char *type_val = param_str(params, "type");
     if (type_val && strcmp(type_val, "ticket") != 0 && strcmp(type_val, "epic") != 0)
@@ -181,17 +185,41 @@ static cJSON *tool_list_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
     const char *type_filter = param_str(params, "type");
     const char *assignee_filter = param_str(params, "assignee");
     bool summary = param_bool(params, "summary", false);
+    bool workable = param_bool(params, "workable", false);
 
     Ticket **tickets = ticket_list_filtered(ctx->db, project_id, status_id, type_filter,
-                                            assignee_filter, limit, offset);
+                                            assignee_filter, workable, limit, offset);
     cJSON *arr = cJSON_CreateArray();
     if (!tickets) return mcp_tool_ok(id, arr);
+
+    /* open_tasks per ticket, one query for the whole project (workable mode) */
+    cJSON *open_tasks = NULL;
+    if (workable) {
+        char pid[32];
+        snprintf(pid, sizeof(pid), "%d", project_id);
+        const char *qp[1] = {pid};
+        PGresult *cr = PQexecParams(ctx->db->conn,
+            "SELECT tt.ticket_id, count(*) FROM ticket_tasks tt JOIN tickets t ON t.id = tt.ticket_id "
+            "WHERE t.project_id = $1 AND NOT tt.is_completed GROUP BY tt.ticket_id",
+            1, NULL, qp, NULL, NULL, 0);
+        open_tasks = cJSON_CreateObject();
+        if (cr && PQresultStatus(cr) == PGRES_TUPLES_OK)
+            for (int k = 0; k < PQntuples(cr); k++)
+                cJSON_AddNumberToObject(open_tasks, PQgetvalue(cr, k, 0), atoi(PQgetvalue(cr, k, 1)));
+        if (cr) PQclear(cr);
+    }
 
     for (int i = 0; tickets[i]; i++) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddNumberToObject(o, "id", tickets[i]->id);
         cJSON_AddNumberToObject(o, "project_id", tickets[i]->project_id);
         cJSON_AddNumberToObject(o, "status_id", tickets[i]->status_id);
+        if (open_tasks) {
+            char key[32];
+            snprintf(key, sizeof(key), "%d", tickets[i]->id);
+            cJSON *n = cJSON_GetObjectItemCaseSensitive(open_tasks, key);
+            cJSON_AddNumberToObject(o, "open_tasks", n ? n->valuedouble : 0);
+        }
         cJSON_AddStringToObject(o, "type", tickets[i]->type ? tickets[i]->type : "ticket");
         cJSON_AddStringToObject(o, "title", tickets[i]->title);
         if (!summary && tickets[i]->description)
@@ -210,6 +238,7 @@ static cJSON *tool_list_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
             cJSON_AddStringToObject(o, "updated_at", tickets[i]->updated_at);
         cJSON_AddItemToArray(arr, o);
     }
+    cJSON_Delete(open_tasks);
     ticket_free_array(tickets);
     return mcp_tool_ok(id, arr);
 }
@@ -446,6 +475,23 @@ static cJSON *tool_get_ticket_detailed(McpContext *ctx, cJSON *id, cJSON *params
                 cJSON_AddNumberToObject(rj, "other_ticket_id", rel->from_ticket_id);
                 cJSON_AddStringToObject(rj, "other_ticket_title", rel->from_ticket_title);
             }
+            {
+                bool out = rel->from_ticket_id == d->ticket->id;
+                const char *t = rel->relation_type, *role = t;
+                if (strcmp(t, "blocks") == 0)            role = out ? "blocks" : "blocked_by";
+                else if (strcmp(t, "parent_of") == 0)    role = out ? "parent_of" : "child_of";
+                else if (strcmp(t, "duplicate_of") == 0) role = out ? "duplicate_of" : "has_duplicate";
+                cJSON_AddStringToObject(rj, "role", role);
+                if (strcmp(t, "blocks") == 0) {
+                    char meaning[160];
+                    int other = out ? rel->to_ticket_id : rel->from_ticket_id;
+                    snprintf(meaning, sizeof(meaning), out
+                        ? "this ticket must be done before #%d can start (#%d waits for this one)"
+                        : "#%d must be done before this ticket can start (this one waits for #%d)",
+                        other, other);
+                    cJSON_AddStringToObject(rj, "meaning", meaning);
+                }
+            }
             if (rel->created_at)
                 cJSON_AddStringToObject(rj, "created_at", rel->created_at);
             cJSON_AddItemToArray(relations_arr, rj);
@@ -534,9 +580,13 @@ static cJSON *tool_get_ticket_detailed(McpContext *ctx, cJSON *id, cJSON *params
 
 static cJSON *tool_move_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
     int ticket_id, new_status_id;
-    if (!param_num(params, "ticket_id", &ticket_id) ||
-        !param_num(params, "new_status_id", &new_status_id))
-        return mcp_tool_err(id, "Missing required parameters: ticket_id, new_status_id");
+    bool ok[2] = {param_num(params, "ticket_id", &ticket_id),
+                  param_num_alias(params, "new_status_id", "status_id", &new_status_id)};
+    if (!ok[0] || !ok[1]) {
+        const char *names[2] = {"ticket_id", "new_status_id"};
+        char buf[100];
+        return mcp_tool_err(id, missing_params_msg(buf, sizeof(buf), names, ok, 2));
+    }
 
     if (!ticket_update_status(ctx->db, ticket_id, new_status_id)) {
         /* Read error BEFORE any subsequent query clobbers it */
@@ -568,8 +618,9 @@ static cJSON *tool_move_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
 static cJSON *tool_move_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
     cJSON *ids_j = cJSON_GetObjectItemCaseSensitive(params, "ticket_ids");
     int new_status_id;
-    if (!cJSON_IsArray(ids_j) || !param_num(params, "new_status_id", &new_status_id))
-        return mcp_tool_err(id, "Missing required parameters: ticket_ids (array), new_status_id");
+    if (!cJSON_IsArray(ids_j) || !param_num_alias(params, "new_status_id", "status_id", &new_status_id))
+        return mcp_tool_err(id, !cJSON_IsArray(ids_j) ? "Missing required parameters: ticket_ids (array)"
+                                                      : "Missing required parameters: new_status_id");
 
     int total   = cJSON_GetArraySize(ids_j);
     int success = 0;
@@ -759,20 +810,40 @@ static cJSON *tool_delete_ticket(McpContext *ctx, cJSON *id, cJSON *params) {
  * Relations
  * ============================================================================ */
 
+/* Shared argument parsing of link/unlink (#970, #830). relation_type is
+ * canonical, link_type its alias (same name as kabai_docs_link_notes).
+ * blocked_by is the natural reading of blocks: "from is blocked by to" is
+ * stored as "to blocks from". Returns an error response or NULL. */
+static cJSON *read_relation_args(cJSON *id, cJSON *params, int *from_id, int *to_id,
+                                 const char **rel) {
+    *rel = param_str_alias(params, "relation_type", "link_type");
+    bool ok[3] = {param_num(params, "from_ticket_id", from_id),
+                  param_num(params, "to_ticket_id", to_id), *rel != NULL};
+    if (!ok[0] || !ok[1] || !ok[2]) {
+        const char *names[3] = {"from_ticket_id", "to_ticket_id",
+                                "relation_type (alias: link_type)"};
+        char buf[200];
+        return mcp_tool_err(id, missing_params_msg(buf, sizeof(buf), names, ok, 3));
+    }
+    if (strcmp(*rel, "blocked_by") == 0) {
+        int tmp = *from_id; *from_id = *to_id; *to_id = tmp;
+        *rel = "blocks";
+    }
+    return NULL;
+}
+
 static cJSON *tool_link_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
     int from_id, to_id;
-    const char *rel = param_str(params, "relation_type");
-    if (!param_num(params, "from_ticket_id", &from_id) ||
-        !param_num(params, "to_ticket_id", &to_id) || !rel)
-        return mcp_tool_err(id,
-            "Missing required parameters: from_ticket_id, to_ticket_id, relation_type");
+    const char *rel;
+    cJSON *err = read_relation_args(id, params, &from_id, &to_id, &rel);
+    if (err) return err;
 
     if (strcmp(rel, "parent_of")    != 0 &&
         strcmp(rel, "blocks")       != 0 &&
         strcmp(rel, "duplicate_of") != 0 &&
         strcmp(rel, "relates_to")   != 0)
         return mcp_tool_err(id,
-            "Invalid relation_type: must be parent_of, blocks, duplicate_of, or relates_to");
+            "Invalid relation_type: must be parent_of, blocks, blocked_by, duplicate_of, or relates_to");
 
     if (!ticket_link(ctx->db, from_id, to_id, rel))
         return kanban_db_error(ctx, id,
@@ -785,11 +856,9 @@ static cJSON *tool_link_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
 
 static cJSON *tool_unlink_tickets(McpContext *ctx, cJSON *id, cJSON *params) {
     int from_id, to_id;
-    const char *rel = param_str(params, "relation_type");
-    if (!param_num(params, "from_ticket_id", &from_id) ||
-        !param_num(params, "to_ticket_id", &to_id) || !rel)
-        return mcp_tool_err(id,
-            "Missing required parameters: from_ticket_id, to_ticket_id, relation_type");
+    const char *rel;
+    cJSON *err = read_relation_args(id, params, &from_id, &to_id, &rel);
+    if (err) return err;
 
     if (!ticket_unlink(ctx->db, from_id, to_id, rel))
         return ctx->db->last_primary[0]
@@ -999,6 +1068,87 @@ static cJSON *tool_create_status_transition(McpContext *ctx, cJSON *id, cJSON *p
     return mcp_tool_ok(id, r);
 }
 
+/* Removes one explicit workflow edge (#847). Errors name the way out. */
+static cJSON *tool_delete_status_transition(McpContext *ctx, cJSON *id, cJSON *params) {
+    int project_id, from_id, to_id;
+    bool ok[3] = {param_num(params, "project_id", &project_id),
+                  param_num(params, "from_status_id", &from_id),
+                  param_num(params, "to_status_id", &to_id)};
+    if (!ok[0] || !ok[1] || !ok[2]) {
+        const char *names[3] = {"project_id", "from_status_id", "to_status_id"};
+        char buf[120];
+        return mcp_tool_err(id, missing_params_msg(buf, sizeof(buf), names, ok, 3));
+    }
+
+    int n = status_transition_delete(ctx->db, project_id, from_id, to_id);
+    if (n < 0)
+        return kanban_db_error(ctx, id, "Failed to delete status transition");
+
+    char pid[32], fid[32], tid[32];
+    snprintf(pid, sizeof(pid), "%d", project_id);
+    snprintf(fid, sizeof(fid), "%d", from_id);
+    snprintf(tid, sizeof(tid), "%d", to_id);
+
+    if (n == 0) {
+        char msg[700];
+        const char *qp[3] = {pid, fid, tid};
+        PGresult *res = PQexecParams(ctx->db->conn,
+            "SELECT (SELECT special_type FROM board_statuses WHERE id = $2 AND project_id = $1),"
+            "       (SELECT special_type FROM board_statuses WHERE id = $3 AND project_id = $1),"
+            "       EXISTS (SELECT 1 FROM board_statuses WHERE id = $2 AND project_id = $1),"
+            "       EXISTS (SELECT 1 FROM board_statuses WHERE id = $3 AND project_id = $1)",
+            3, NULL, qp, NULL, NULL, 0);
+        bool have_from = res && PQresultStatus(res) == PGRES_TUPLES_OK &&
+                         PQgetvalue(res, 0, 2)[0] == 't';
+        bool have_to   = res && PQresultStatus(res) == PGRES_TUPLES_OK &&
+                         PQgetvalue(res, 0, 3)[0] == 't';
+        bool implicit  = have_from && have_to &&
+            (strcmp(PQgetvalue(res, 0, 1), "human_intervention") == 0 ||
+             strcmp(PQgetvalue(res, 0, 0), "human_answered") == 0);
+        if (res) PQclear(res);
+
+        if (!have_from || !have_to)
+            return mcp_tool_err(id,
+                "from_status_id/to_status_id does not belong to the given project_id: "
+                "look the columns up via kabai_list_board_statuses(project_id)");
+        if (implicit)
+            return mcp_tool_err(id,
+                "This is an implicit edge (into human_intervention / out of human_answered): "
+                "the database always allows it and it cannot be removed. "
+                "kabai_list_status_transitions marks such edges with implicit:true");
+
+        int pos = snprintf(msg, sizeof(msg), "No such transition %d -> %d. Transitions out of %d:",
+                           from_id, to_id, from_id);
+        StatusTransition **trans = status_transition_list_by_project(ctx->db, project_id);
+        int found = 0;
+        for (int i = 0; trans && trans[i] && pos < (int)sizeof(msg) - 16; i++)
+            if (trans[i]->from_status_id == from_id) {
+                pos += snprintf(msg + pos, sizeof(msg) - pos, "%s %d",
+                                found ? "," : "", trans[i]->to_status_id);
+                found++;
+            }
+        status_transition_free_array(trans);
+        if (!found) snprintf(msg + pos, sizeof(msg) - pos, " none");
+        return mcp_tool_err(id, msg);
+    }
+
+    /* Tickets are not bound to transitions; report who is affected. */
+    const char *cp[2] = {pid, fid};
+    int in_source = 0;
+    PGresult *cnt = PQexecParams(ctx->db->conn,
+        "SELECT count(*) FROM tickets WHERE project_id = $1 AND status_id = $2",
+        2, NULL, cp, NULL, NULL, 0);
+    if (cnt && PQresultStatus(cnt) == PGRES_TUPLES_OK) in_source = atoi(PQgetvalue(cnt, 0, 0));
+    if (cnt) PQclear(cnt);
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "success", 1);
+    cJSON_AddNumberToObject(r, "tickets_in_source_column", in_source);
+    return mcp_tool_ok(id, r);
+}
+
+/* Explicit edges plus the implicit ones the trigger always allows (#800):
+ * any column -> human_intervention, human_answered -> any column. */
 static cJSON *tool_list_status_transitions(McpContext *ctx, cJSON *id, cJSON *params) {
     int project_id;
     if (!param_num(params, "project_id", &project_id))
@@ -1007,15 +1157,41 @@ static cJSON *tool_list_status_transitions(McpContext *ctx, cJSON *id, cJSON *pa
     StatusTransition **trans = status_transition_list_by_project(ctx->db, project_id);
 
     cJSON *arr = cJSON_CreateArray();
-    if (!trans) return mcp_tool_ok(id, arr);
-
-    for (int i = 0; trans[i]; i++) {
+    for (int i = 0; trans && trans[i]; i++) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddNumberToObject(o, "from_status_id", trans[i]->from_status_id);
         cJSON_AddNumberToObject(o, "to_status_id",   trans[i]->to_status_id);
         cJSON_AddItemToArray(arr, o);
     }
     status_transition_free_array(trans);
+
+    char pid[32];
+    snprintf(pid, sizeof(pid), "%d", project_id);
+    const char *qp[1] = {pid};
+    PGresult *res = PQexecParams(ctx->db->conn,
+        "SELECT a.id, b.id, b.special_type = 'human_intervention' "
+        "FROM board_statuses a JOIN board_statuses b "
+        "  ON b.project_id = a.project_id AND b.id <> a.id "
+        "WHERE a.project_id = $1 "
+        "  AND (b.special_type = 'human_intervention' OR a.special_type = 'human_answered') "
+        "  AND NOT EXISTS (SELECT 1 FROM status_transitions st WHERE st.project_id = a.project_id "
+        "                  AND st.from_status_id = a.id AND st.to_status_id = b.id) "
+        "ORDER BY a.id, b.id",
+        1, NULL, qp, NULL, NULL, 0);
+    if (res && PQresultStatus(res) == PGRES_TUPLES_OK) {
+        for (int i = 0; i < PQntuples(res); i++) {
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddNumberToObject(o, "from_status_id", atoi(PQgetvalue(res, i, 0)));
+            cJSON_AddNumberToObject(o, "to_status_id",   atoi(PQgetvalue(res, i, 1)));
+            cJSON_AddBoolToObject(o, "implicit", 1);
+            cJSON_AddStringToObject(o, "reason",
+                PQgetvalue(res, i, 2)[0] == 't'
+                    ? "human_intervention is reachable from any column"
+                    : "human_answered can move to any column");
+            cJSON_AddItemToArray(arr, o);
+        }
+    }
+    if (res) PQclear(res);
     return mcp_tool_ok(id, arr);
 }
 
@@ -1227,7 +1403,8 @@ void kanban_register_tools(McpRegistry *r) {
 
     s = schema_new();
     schema_num(s, "project_id",  "ID of the project this ticket belongs to", true);
-    schema_num(s, "status_id",   "ID of the initial board column/status", true);
+    schema_num(s, "status_id",   "ID of the initial board column/status (required; alias: new_status_id)", false);
+    schema_num(s, "new_status_id", "Alias of status_id (optional)", false);
     schema_str(s, "title",       "Ticket title", true);
     schema_str(s, "description", "Optional detailed description", false);
     schema_str(s, "type",        "'ticket' (default) or 'epic'", false);
@@ -1246,11 +1423,16 @@ void kanban_register_tools(McpRegistry *r) {
     schema_str(s, "assignee",   "Filter by exact assignee name, e.g. to resume your own work (optional)", false);
     schema_num(s, "limit",      "Max tickets to return (optional, default unlimited)", false);
     schema_num(s, "offset",     "Tickets to skip for pagination (optional, default 0)", false);
+    schema_bool(s, "workable",
+        "If true, return only pickup-ready tickets (default false): unassigned, no open 'blocks' predecessor "
+        "(every ticket that blocks it is in done), in a column an agent may pick up from (not done, not "
+        "human_intervention/human_answered; without status_id only columns with an agent_role_instruction). "
+        "Adds open_tasks per ticket. Works with project_id of an archived project like any explicit project.", false);
     schema_bool(s, "summary",
         "If true, omit description fields — returns only id/status_id/title/assignee/timestamps. "
         "Use for an overview when descriptions are not needed.", false);
     mcp_registry_add(r, "kabai_list_tickets",
-        "List tickets in a project. Supports status, type and assignee filters, pagination (limit/offset), "
+        "List tickets in a project. Supports status, type and assignee filters, workable:true (pickup-ready tickets), pagination (limit/offset), "
         "and summary mode (omits description). Use summary:true + status_id for cheap overview calls.",
         s, tool_list_tickets);
 
@@ -1304,7 +1486,8 @@ void kanban_register_tools(McpRegistry *r) {
     s = schema_new();
     schema_num(s, "ticket_id", "Numeric ticket ID", true);
     schema_num(s, "new_status_id",
-        "Target column/status ID. Must be an allowed transition per workflow graph.", true);
+        "Target column/status ID. Must be an allowed transition per workflow graph. Required (alias: status_id).", false);
+    schema_num(s, "status_id", "Alias of new_status_id (optional)", false);
     mcp_registry_add(r, "kabai_move_ticket",
         "Move a ticket to a new column. Rejected by the database if the transition "
         "is not in the workflow graph or if acceptance criteria are unmet.",
@@ -1312,7 +1495,8 @@ void kanban_register_tools(McpRegistry *r) {
 
     s = schema_new();
     schema_num_array(s, "ticket_ids", "Array of ticket IDs to move", true);
-    schema_num(s, "new_status_id", "Target status ID for all tickets", true);
+    schema_num(s, "new_status_id", "Target status ID for all tickets (required; alias: status_id)", false);
+    schema_num(s, "status_id", "Alias of new_status_id (optional)", false);
     mcp_registry_add(r, "kabai_move_tickets",
         "Batch move multiple tickets to the same new status in one call. "
         "Returns per-ticket success/error breakdown.",
@@ -1367,10 +1551,14 @@ void kanban_register_tools(McpRegistry *r) {
     schema_num(s, "from_ticket_id", "Source ticket ID", true);
     schema_num(s, "to_ticket_id",   "Target ticket ID", true);
     schema_str(s, "relation_type",
-        "One of: parent_of (epic→child), blocks (from blocks to), "
-        "duplicate_of (from is duplicate of to), relates_to (generic)", true);
+        "Canonical name; required (alternatively link_type). One of: parent_of (epic→child), "
+        "blocks (from_ticket must be done BEFORE to_ticket can start; to waits for from), "
+        "blocked_by (the reverse reading: from waits for to; stored as to blocks from), "
+        "duplicate_of (from is duplicate of to), relates_to (generic)", false);
+    schema_str(s, "link_type", "Alias of relation_type, same name as kabai_docs_link_notes (optional)", false);
     mcp_registry_add(r, "kabai_link_tickets",
-        "Create a directed relation between two tickets. "
+        "Create a directed relation between two tickets. blocks means: from_ticket must be done "
+        "before to_ticket can start (to waits for from); blocked_by is the same edge read the other way. "
         "Use parent_of to link an epic to its child tickets. "
         "Relations are visible in get_ticket_detailed as the 'relations' array.",
         s, tool_link_tickets);
@@ -1379,7 +1567,8 @@ void kanban_register_tools(McpRegistry *r) {
     schema_num(s, "from_ticket_id", "Source ticket ID", true);
     schema_num(s, "to_ticket_id",   "Target ticket ID", true);
     schema_str(s, "relation_type",
-        "The relation to remove (must match exactly what was created)", true);
+        "The relation to remove (must match exactly what was created, blocked_by allowed); required, alternatively link_type", false);
+    schema_str(s, "link_type", "Alias of relation_type (optional)", false);
     mcp_registry_add(r, "kabai_unlink_tickets",
         "Remove a directed relation between two tickets", s, tool_unlink_tickets);
 
@@ -1456,8 +1645,21 @@ void kanban_register_tools(McpRegistry *r) {
     s = schema_new();
     schema_num(s, "project_id", "Numeric project ID", true);
     mcp_registry_add(r, "kabai_list_status_transitions",
-        "List all allowed workflow transitions for a project",
+        "List the allowed workflow transitions of a project. Entries with implicit:true are not "
+        "stored but always allowed by the database: any column -> human_intervention and "
+        "human_answered -> any column. Every move the database accepts can be derived from this list.",
         s, tool_list_status_transitions);
+
+    s = schema_new();
+    schema_num(s, "project_id",     "Numeric project ID", true);
+    schema_num(s, "from_status_id", "Source column ID", true);
+    schema_num(s, "to_status_id",   "Target column ID", true);
+    mcp_registry_add(r, "kabai_delete_status_transition",
+        "Remove one workflow transition (inverse of create_status_transition). Returns "
+        "tickets_in_source_column; tickets are not bound to transitions and stay where they are. "
+        "Implicit human_intervention/human_answered edges cannot be removed. An unknown "
+        "transition lists the transitions out of the source column.",
+        s, tool_delete_status_transition);
 
     /* ---- Maintenance ---- */
 

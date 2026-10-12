@@ -1,4 +1,5 @@
 #include "mcp/schema.h"
+#include <stdio.h>
 
 cJSON *schema_new(void) {
     cJSON *s = cJSON_CreateObject();
@@ -76,4 +77,25 @@ bool param_is_null(cJSON *params, const char *name) {
 
 bool param_present(cJSON *params, const char *name) {
     return cJSON_GetObjectItemCaseSensitive(params, name) != NULL;
+}
+
+bool param_num_alias(cJSON *params, const char *name, const char *alias, int *out) {
+    return param_num(params, name, out) || param_num(params, alias, out);
+}
+
+const char *param_str_alias(cJSON *params, const char *name, const char *alias) {
+    const char *v = param_str(params, name);
+    return v ? v : param_str(params, alias);
+}
+
+const char *missing_params_msg(char *buf, size_t size, const char *const *names,
+                               const bool *ok, int count) {
+    size_t n = (size_t)snprintf(buf, size, "Missing required parameters:");
+    const char *sep = " ";
+    for (int i = 0; i < count && n < size; i++) {
+        if (ok[i]) continue;
+        n += (size_t)snprintf(buf + n, size - n, "%s%s", sep, names[i]);
+        sep = ", ";
+    }
+    return buf;
 }

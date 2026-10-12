@@ -61,7 +61,8 @@ and improvise.
    project**, never reuse them across projects. Read each column's
    `agent_role_instruction` and follow it.
 3. `kabai_list_status_transitions(project_id)` → moves are only legal
-   along this graph.
+   along this graph (incl. `implicit: true` edges). Find pickup-ready
+   tickets with `kabai_list_tickets(project_id, workable: true)`.
 
 ## Golden rules — tickets
 
@@ -86,7 +87,8 @@ and improvise.
    the ticket to the `human_intervention` column, stop. Resume from
    `human_answered`.
 8. **Epics** group children via `kabai_link_tickets(parent_of)`; `blocks`
-   expresses ordering; duplicates get merged, not abandoned.
+   expresses ordering (`from` done before `to` starts); duplicates get
+   merged, not abandoned.
 9. **docs_required is mandatory** for architecture, design-decision, and
    schema work — and for EVERY epic. An epic MUST NOT close without a
    note created or substantially updated and linked during its lifetime.

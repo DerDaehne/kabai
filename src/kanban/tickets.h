@@ -1,6 +1,7 @@
 #ifndef KANBAN_TICKETS_H
 #define KANBAN_TICKETS_H
 
+#include <stdbool.h>
 #include "db/connection.h"
 #include "comments.h"
 
@@ -99,7 +100,7 @@ Ticket* ticket_get_by_id(DatabaseConnection *db, int ticket_id);
  * @param offset Results to skip (only used when limit > 0)
  * @return Array of Ticket* (NULL-terminated)
  */
-Ticket** ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id, const char *type_filter, const char *assignee_filter, int limit, int offset);
+Ticket** ticket_list_filtered(DatabaseConnection *db, int project_id, int status_id, const char *type_filter, const char *assignee_filter, bool workable, int limit, int offset);
 
 /**
  * @brief Delete a ticket (cascades tasks, comments, documents)

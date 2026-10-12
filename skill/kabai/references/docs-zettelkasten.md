@@ -79,6 +79,8 @@ kabai_docs_create_note {
 Links ARE the structure — a note without links is invisible to navigation
 ("orphan"). After creating a note, link it:
 
+(`kabai_docs_link_notes` takes `link_type`; `relation_type`, the name of `kabai_link_tickets`, is accepted as alias.)
+
 | link_type | Use |
 |-----------|-----|
 | `contains` | hub → member. A hub with its contains links IS a table of contents. Every new note SHOULD be added to the matching hub. |

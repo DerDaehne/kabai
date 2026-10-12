@@ -125,16 +125,16 @@ kabai/
 |------|---------|
 | `kabai_create_project` / `kabai_list_projects` / `kabai_get_project` | project management |
 | `kabai_list_board_statuses` / `kabai_create_board_status` | columns incl. per-column `agent_role_instruction` |
-| `kabai_list_status_transitions` / `kabai_create_status_transition` | workflow graph (DB-enforced) |
+| `kabai_list_status_transitions` / `kabai_create_status_transition` / `kabai_delete_status_transition` | workflow graph (DB-enforced); the list also shows the implicit human_intervention/human_answered edges |
 
 ### Tickets
 | Tool | Purpose |
 |------|---------|
 | `kabai_create_ticket` / `kabai_update_ticket` / `kabai_delete_ticket` | lifecycle; `docs_required` gates closing on a linked note |
-| `kabai_list_tickets` / `kabai_search_tickets` / `kabai_get_ticket` / `kabai_get_ticket_detailed` | reading; search is full-text ranked with snippets (lean rows, `full` for descriptions, global without `project_id`); list filters by status/type/assignee; detailed includes tasks, work log (`comments_limit`), relations, linked notes |
+| `kabai_list_tickets` / `kabai_search_tickets` / `kabai_get_ticket` / `kabai_get_ticket_detailed` | reading; search is full-text ranked with snippets (lean rows, `full` for descriptions, global without `project_id`); list filters by status/type/assignee and `workable` (pickup-ready); detailed includes tasks, work log (`comments_limit`), relations, linked notes |
 | `kabai_move_ticket` / `kabai_move_tickets` | workflow moves (graph + guards enforced) |
 | `kabai_assign_ticket` | assignee + model from env |
-| `kabai_link_tickets` / `kabai_unlink_tickets` | parent_of, blocks, duplicate_of, relates_to |
+| `kabai_link_tickets` / `kabai_unlink_tickets` | parent_of, blocks (from done before to starts; `blocked_by` as reverse reading), duplicate_of, relates_to; `link_type` is an alias of `relation_type` |
 | `kabai_add_task` / `kabai_complete_task` / `kabai_complete_tasks` | acceptance criteria (open tasks block done) |
 | `kabai_add_comment` / `kabai_list_comments` | work log |
 

@@ -39,6 +39,10 @@ int status_transition_create(
 
 StatusTransition **status_transition_list_by_project(DatabaseConnection *db, int project_id);
 
+/* Removes one workflow edge. Returns rows deleted (0 or 1), -1 on error. */
+int status_transition_delete(DatabaseConnection *db, int project_id, int from_status_id,
+                             int to_status_id);
+
 void board_status_free(BoardStatus *bs);
 void board_status_free_array(BoardStatus **arr);
 void status_transition_free_array(StatusTransition **arr);
